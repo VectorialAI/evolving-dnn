@@ -383,7 +383,7 @@ def insert_subgraph(
                 if isinstance(arg, torch.fx.Node):
                     new_args.append(old_to_new[arg])
                 elif isinstance(arg, tuple):
-                    new_args.append(tuple(old_to_new[arg] if isinstance(arg, torch.fx.Node) else arg for arg in arg))
+                    new_args.append(tuple(old_to_new[a] if isinstance(a, torch.fx.Node) else a for a in arg))
                 else:
                     new_args.append(arg)
             new_args = tuple(new_args)
