@@ -34,6 +34,11 @@ class NewGELU(nn.Module):
     def forward(self, x):
         return new_gelu_function(x)
 
+# Wrapped to avoid output errors immediately following masked_fill which adds -inf to the logits
+@torch.fx.wrap
+def _masked_fill_softmax(input: torch.Tensor, mask: torch.Tensor, value: float, dim: int) -> torch.Tensor:
+    return F.softmax(input.masked_fill(mask, value), dim=dim)
+
 class CausalSelfAttention(nn.Module):
     """
     A vanilla multi-head masked self-attention layer with a projection at the end.
@@ -66,15 +71,17 @@ class CausalSelfAttention(nn.Module):
             sequence_length = self.block_size
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k ,v  = self.c_attn(x).split(self.n_embd, dim=2)
+        attn_output = self.c_attn(x)
+        q = attn_output.narrow(2, 0, self.n_embd)
+        k = attn_output.narrow(2, self.n_embd, self.n_embd)
+        v = attn_output.narrow(2, 2 * self.n_embd, self.n_embd)
         k = k.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:sequence_length,:sequence_length] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
+        att = _masked_fill_softmax(att, self.bias[:,:,:sequence_length,:sequence_length] == 0, float('-inf'), dim=-1)
         att = self.attn_dropout(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = _transpose_contiguous(y, 1, 2).view(batch_size, sequence_length, embedding_dim) # re-assemble all head outputs side by side
