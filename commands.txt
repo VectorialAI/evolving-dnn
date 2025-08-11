@@ -4,9 +4,9 @@ apt update && \
 apt install git software-properties-common graphviz screen rsync -y && \
 git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
 cd evolving-dnn/ && \
-git checkout refactor-for-experiments && \
+git checkout test-branch-for-a-bunch-of-branches && \
 chmod +x run_experiment.sh && \
-./run_experiment.sh /workspace/experiments/test29
+./run_experiment.sh /workspace/experiments/test01
 
 
 To get the output files locally:
