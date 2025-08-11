@@ -379,11 +379,6 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
     Returns:
         graph: The modified graph
     """
-    # Check if reference node is a skip connection
-    # TODO: Implement different removals for skip connections
-    if reference_node.target in (torch.add, torch.cat, torch.mul):
-        raise ValueError("Reference node is a skip connection or branch node, can't be removed")
-    
     # Get shapes before removing node
     removed_output_shape = reference_node.meta['tensor_meta'].shape  # SHAPE NOTE: Full shape with batch dimension
     for feeding_node in reference_node.args:

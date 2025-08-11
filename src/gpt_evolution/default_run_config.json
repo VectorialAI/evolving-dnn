@@ -20,7 +20,7 @@
       "num_generations": 10,
       "crossover_instead_of_mutation_rate": 0.5,
       "max_subgraph_attempts": 100,
-      "unremovable_node_targets": ["torch.nn.functional.softmax"],
+      "unremovable_node_targets": ["torch.nn.functional.softmax", "torch.add", "torch.cat", "torch.mul"],
       "mutation_probabilities": {
         "mutate_batch_size": 0.2,
         "mutate_learning_rate": 0.2,
