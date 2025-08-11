@@ -9,6 +9,7 @@ from torch.fx import Graph
 from ..evolution import Evolution
 from .individual import NeuralNetworkIndividual
 from .visualization import visualize_graph
+from .variation.utils import print_graph_debug_info
 
 class NeuralNetworkEvolution(Evolution):
     def _pre_evaluation(self, individual: NeuralNetworkIndividual):
@@ -17,24 +18,7 @@ class NeuralNetworkEvolution(Evolution):
         individual.param_count = n_params  # TODO use this in fitness calculation, we should minimize this
 
     def _handle_evaluation_error(self, individual: NeuralNetworkIndividual):
-        for node in individual.graph_module.graph.nodes:
-            log_msg = f"Node {node.name} has shape: "
-            if "tensor_meta" in node.meta and hasattr(node.meta['tensor_meta'], 'shape'):
-                log_msg += f"{node.meta['tensor_meta'].shape}"
-                try:
-                    # Print which device the tensor is on
-                    if node.op == "call_module":
-                        submodule = individual.graph_module.get_submodule(node.target)
-                        # Get device from first parameter if available
-                        params = list(submodule.parameters())
-                        if params:
-                            log_msg += f" on device {params[0].device}"
-                except Exception:
-                    pass
-            else:
-                log_msg += "No shape found"
-            logging.debug(log_msg)
-        logging.debug(individual.graph_module.graph)
+        print_graph_debug_info(individual.graph_module)
         individual.graph_module = individual.graph_module.to('cpu')
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

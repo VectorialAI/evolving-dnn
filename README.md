@@ -16,6 +16,10 @@ The project uses evolutionary algorithms to:
 src/
 ├── evolution.py      # Core evolutionary algorithm framework
 ├── individual.py     # Base individual class
+├── mingpt_altered/   # Modified minGPT implementation
+│   ├── model.py
+│   ├── trainer.py
+│   └── utils.py
 ├── nn/               # Neural network specific implementations
 │   ├── core.py                     # Graph representation utilities
 │   ├── individual.py               # Neural network individual class
@@ -23,18 +27,19 @@ src/
 │   ├── evolution.py                # NN-specific evolution class
 │   ├── evaluate.py                 # Fitness evaluation (perplexity-based)
 │   ├── dataset.py                  # Text dataset for training
-│   ├── bpe.py                      # Basic BPE tokenization
 │   ├── visualization.py            # Graph visualization utilities
 │   └── variation/                  # Mutation and crossover operations
 │       ├── architecture_mutation.py     # Add/remove layers, connections
 │       ├── architecture_crossover.py    # Architecture crossover operations  
+│       ├── architecture_adaptation.py   # Architecture adaptation operations
 │       ├── hyperparam_variation.py      # Hyperparameter mutations/crossover
 │       └── utils.py                     # Helper functions for graph manipulation
 └── gpt_evolution/    # GPT-specific evolution setup
     ├── run.py                      # Main execution script
-    └── initial_population.py       # Generate initial GPT population
-    └── helpers.py                  # Helper functions for GPT evolution execution
-    └── default_run_config.json     # Default run configuration (can be partially overridden for specific runs)
+    ├── initial_population.py       # Generate initial GPT population
+    ├── helpers.py                  # Helper functions for GPT evolution execution
+    ├── default_run_config.json     # Default run configuration
+    └── local_run_config.json       # Local override configuration
 ```
 
 ## Key Components

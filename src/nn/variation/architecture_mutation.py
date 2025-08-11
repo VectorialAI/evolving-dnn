@@ -9,8 +9,8 @@ from torch.fx.passes.shape_prop import ShapeProp
 
 from ..individual_graph_module import NeuralNetworkIndividualGraphModule
 from ..variation.utils import (
-    node_has_shape, add_specific_node, add_skip_connection,
-    add_branch_nodes, get_feature_dims, node_has_float_dtype
+    node_has_shape, add_specific_node, add_skip_connection, 
+    get_feature_dims, node_has_float_dtype, print_graph_debug_info, add_branch_nodes
 )
 from ..variation.architecture_adaptation import adapt_node_shape
 
@@ -359,8 +359,13 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
     graph.graph.lint()
     graph.recompile()
 
-    # Run shape propagation again to update all shape metadata
-    ShapeProp(graph).propagate(graph.example_input)
+    try:
+        # Run shape propagation again to update all shape metadata
+        ShapeProp(graph).propagate(graph.example_input)
+    except Exception as e:
+        logging.error(f"Error in shape propagation: {e}")
+        print_graph_debug_info(graph)
+        raise e
 
     return graph
 

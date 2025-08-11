@@ -220,5 +220,33 @@ def node_has_float_dtype(node: torch.fx.Node):
     # Check if dtype is one of the PyTorch float types
     float_dtypes = [torch.float32, torch.float64, torch.float16, torch.bfloat16, 
                    torch.float8_e5m2, torch.float8_e4m3fn, torch.float, torch.double, torch.half, torch.bfloat16]
-
     return tensor_dtype in float_dtypes
+
+def print_graph_debug_info(graph):
+    """
+    Prints every node in the graph, its name, op, shape (if available), args, and users for debugging.
+    Args:
+        graph: The FX GraphModule or Graph
+    """
+    logging.debug("\n==== GRAPH DEBUG INFO ====")
+    for node in graph.graph.nodes if hasattr(graph, 'graph') else graph.nodes:
+        name = getattr(node, 'name', str(node))
+        op = getattr(node, 'op', 'unknown')
+        # Shape info
+        if hasattr(node, 'meta') and 'tensor_meta' in node.meta and hasattr(node.meta['tensor_meta'], 'shape'):
+            shape = node.meta['tensor_meta'].shape
+        else:
+            shape = 'N/A'
+        # Args info
+        args = []
+        for arg in node.args:
+            if hasattr(arg, 'name'):
+                args.append(arg.name)
+            elif isinstance(arg, (tuple, list)):
+                args.append(str([a.name if hasattr(a, 'name') else repr(a) for a in arg]))
+            else:
+                args.append(repr(arg))
+        # Users info
+        users = [u.name for u in getattr(node, 'users', [])]
+        logging.debug(f"Node: {name} | op: {op} | shape: {shape} | Args: {args} | Users: {users}")
+    logging.debug("==== END GRAPH DEBUG INFO ====")

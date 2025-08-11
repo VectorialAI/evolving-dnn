@@ -378,7 +378,15 @@ def insert_subgraph(
                     target_user=new_node
                 )
         else:
-            new_args = tuple(old_to_new[arg] if isinstance(arg, torch.fx.Node) else arg for arg in node.args)
+            new_args = []
+            for arg in node.args:
+                if isinstance(arg, torch.fx.Node):
+                    new_args.append(old_to_new[arg])
+                elif isinstance(arg, tuple):
+                    new_args.append(tuple(old_to_new[a] if isinstance(a, torch.fx.Node) else a for a in arg))
+                else:
+                    new_args.append(arg)
+            new_args = tuple(new_args)
             new_node = _insert_node(target_graph_module, after_node, node, new_args, new_module_name, new_attr_name)
 
         if new_node:
