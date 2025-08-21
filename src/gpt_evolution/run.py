@@ -119,8 +119,8 @@ if __name__ == '__main__':
         suffix = tokenizer_config["data_files_suffix"]
         train_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["train"]]
         validation_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["validation"]]
-        iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, data_dir=tokenizer_config["data_dir"], data_files=train_data_files)["train"]
-        iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)["train"]
+        iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=train_data_files)
+        iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)
     else:
         datasets = load_dataset(**load_dataset_constant_kwargs)
         iterable_train_dataset = datasets["train"]
