@@ -9,14 +9,13 @@ from ..mingpt_altered.trainer import Trainer
 from .individual import NeuralNetworkIndividual
 from .dataset import HuggingFaceIterableDataset
 
-TOTAL_BATCHES_FOR_EVALUATION = 20
-
 def calculate_fitness(
     individual: NeuralNetworkIndividual,
     iterable_train_dataset,
     iterable_test_dataset, 
     tokenizer,
     block_size: int,
+    total_batches_for_evaluation: int = 20,
     num_train_steps: int = 100,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
     loss_log_frequency: int = 100,
@@ -74,7 +73,8 @@ def calculate_fitness(
         iterable_test_dataset,
         tokenizer,
         block_size,
-        device=device
+        device=device,
+        total_batches_for_evaluation=total_batches_for_evaluation
     )
 
     individual.graph_module = individual.graph_module.to('cpu')  # Move the model back to CPU, since we're not going to run it again
@@ -90,7 +90,8 @@ def calculate_perplexity(
     tokenizer,
     block_size: int,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-    batch_size: int = 32
+    batch_size: int = 32,
+    total_batches_for_evaluation: int = 20
 ) -> float:
     """
     Calculate perplexity of a GPT model on the provided data
@@ -115,7 +116,7 @@ def calculate_perplexity(
         iterable_test_dataset,
         tokenizer,
         block_size,
-        max_samples=TOTAL_BATCHES_FOR_EVALUATION * batch_size  # Limit samples for evaluation
+        max_samples=total_batches_for_evaluation * batch_size  # Limit samples for evaluation
     )
     
     # Create DataLoader
@@ -132,7 +133,7 @@ def calculate_perplexity(
     # Disable gradient computation for efficiency
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
-            if i >= TOTAL_BATCHES_FOR_EVALUATION:
+            if i >= total_batches_for_evaluation:
                 break
             idx, targets = batch
             idx, targets = idx.to(device), targets.to(device)
