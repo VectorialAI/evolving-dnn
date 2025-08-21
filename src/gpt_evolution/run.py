@@ -69,7 +69,8 @@ def configure_logger(experiment_path, logging_config):
     logger.addHandler(console_handler)
 
     # Silence verbose loggers
-    for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec"]:
+    # for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec"]:
+    for logger_name in ["urllib3", "fsspec"]:  
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 if __name__ == '__main__':
@@ -119,6 +120,7 @@ if __name__ == '__main__':
         suffix = tokenizer_config["data_files_suffix"]
         train_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["train"]]
         validation_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["validation"]]
+        # TODO: test if the split is needed
         iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=train_data_files)
         iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)
     else:
