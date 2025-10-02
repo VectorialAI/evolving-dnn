@@ -2,6 +2,7 @@ import json
 import logging
 
 import torch
+from ptflops import get_model_complexity_info
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -21,6 +22,7 @@ def calculate_fitness(
     loss_log_frequency: int = 100,
     max_iter_timeout: float = 20.0,
     secondary_iter_timeout: float = 0.2,
+    flops_budget: int = None,
 ) -> float:
     """
     Calculate fitness of a GPT model by training it and returning negative loss
@@ -41,6 +43,32 @@ def calculate_fitness(
         float: Fitness score (higher is better)
     """
     
+    # If FLOPs budget is set, compute per-individual training steps
+    if flops_budget is not None:
+        try:
+            # Get the example input from the FX graph
+            example_input = getattr(individual.graph_module, "example_input", None)
+            batch_size = int(getattr(individual.train_config, "batch_size", 1))
+            
+            # Calculate FLOPs for this model
+            _forward_flops, flops_per_train_step = calculate_model_flops(
+                individual.graph_module,
+                batch_size,
+                block_size,
+                example_input
+            )
+            
+            if flops_per_train_step > 0:
+                computed_batches = int(flops_budget // flops_per_train_step)
+                if computed_batches <= 0:
+                    computed_batches = 1
+                num_train_steps = computed_batches
+        except Exception:
+            logging.exception("Per-individual FLOPs computation failed; using configured training_total_batches")
+    
+    # Ensure trainer runs desired number of steps
+    individual.train_config.max_iters = num_train_steps
+
     # Create train dataset
     train_dataset = HuggingFaceIterableDataset(
         iterable_train_dataset,
@@ -154,3 +182,48 @@ def calculate_perplexity(
     perplexity = torch.exp(torch.tensor(avg_loss)).item()
     logging.debug(f"perplexity: {perplexity}")
     return perplexity
+
+def calculate_model_flops(
+    model: torch.nn.Module,
+    batch_size: int,
+    block_size: int,
+    example_input: torch.Tensor = None,
+) -> tuple[int, int]:
+    """
+    Calculate the number of FLOPs (floating point operations) for a model.
+    
+    Args:
+        model: The model to analyze
+        batch_size: Batch size to use for calculation
+        block_size: Sequence length for the model
+        example_input: Optional example input tensor to determine shape/dtype
+        
+    Returns:
+        tuple[int, int]: A tuple containing (flops_per_forward_pass, flops_per_train_step)
+    """
+    if example_input is None:
+        example_input = torch.zeros(1, block_size, dtype=torch.long)
+    
+    # Build input that matches the model's batch size
+    seq_len = int(example_input.shape[1]) if example_input.dim() >= 2 else int(block_size)
+    dtype = example_input.dtype
+    
+    def input_constructor(input_res):
+        return (torch.zeros(batch_size, seq_len, dtype=dtype),)
+    
+    # Compute MACs for a single forward pass with this batch size
+    macs, _params = get_model_complexity_info(
+        model,
+        input_res=(batch_size, seq_len),
+        input_constructor=input_constructor,
+        as_strings=False,
+        print_per_layer_stat=False,
+        verbose=False,
+    )
+    
+    # Approximate FLOPs per forward as 2 * MACs
+    forward_flops = 2 * macs
+    # Per train step ~ 2x forward (forward+backward)
+    train_step_flops = 2 * forward_flops
+    
+    return forward_flops, train_step_flops

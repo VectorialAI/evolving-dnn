@@ -155,6 +155,8 @@ if __name__ == '__main__':
         "device": training_config["device"],
     }
 
+    # Note: FLOPs-based batch computation is applied per-individual below in fitness_wrapper
+
     # Create a wrapper for calculate_fitness that only takes individual
     def fitness_wrapper(individual: NeuralNetworkIndividual) -> float:
         return calculate_fitness(
@@ -169,6 +171,7 @@ if __name__ == '__main__':
             max_iter_timeout=training_config.get("max_iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
             total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
+            flops_budget=training_config.get("flops_budget"),
         )
 
     evolution = NeuralNetworkEvolution(
