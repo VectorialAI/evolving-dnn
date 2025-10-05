@@ -45,26 +45,43 @@ def calculate_fitness(
     
     # If FLOPs budget is set, compute per-individual training steps
     if flops_budget is not None:
-        try:
-            # Get the example input from the FX graph
-            example_input = getattr(individual.graph_module, "example_input", None)
-            batch_size = int(getattr(individual.train_config, "batch_size", 1))
-            
-            # Calculate FLOPs for this model
-            _forward_flops, flops_per_train_step = calculate_model_flops(
-                individual.graph_module,
-                batch_size,
-                block_size,
-                example_input
-            )
-            
-            if flops_per_train_step > 0:
-                computed_batches = int(flops_budget // flops_per_train_step)
-                if computed_batches <= 0:
-                    computed_batches = 1
-                num_train_steps = computed_batches
-        except Exception:
-            logging.exception("Per-individual FLOPs computation failed; using configured training_total_batches")
+        # Get the example input from the FX graph
+        example_input = getattr(individual.graph_module, "example_input", None)
+        batch_size = int(getattr(individual.train_config, "batch_size", 1))
+        
+        # Create a copy of the model for FLOPs calculation to avoid corrupting the original
+        import copy
+        model_copy = copy.deepcopy(individual.graph_module)
+        
+        # Calculate FLOPs for this model
+        forward_flops, flops_per_train_step = calculate_model_flops(
+            model_copy,
+            batch_size,
+            block_size,
+            example_input
+        )
+        
+        if flops_per_train_step <= 0:
+            raise ValueError(f"FLOPs calculation failed for individual. Got flops_per_train_step={flops_per_train_step}. "
+                           f"This usually means the model is incompatible with FLOPs calculation or has an error.")
+        
+        computed_batches = int(flops_budget // flops_per_train_step)
+        
+        # Apply sensible constraints (min 1 batch, max 10000)
+        computed_batches = max(1, min(computed_batches, 10000))
+        
+        if computed_batches <= 0:
+            computed_batches = 1
+            logging.warning(f"FLOPs budget {flops_budget} too small for model (needs {flops_per_train_step} per step). Using minimum 1 batch.")
+        
+        # Log FLOPs information
+        total_flops_used = computed_batches * flops_per_train_step
+        flops_efficiency = (total_flops_used / flops_budget) * 100 if flops_budget > 0 else 0
+        
+        logging.info(f"Individual FLOPs: {forward_flops:,} forward, {flops_per_train_step:,} per step")
+        logging.info(f"Training: {computed_batches} batches, {total_flops_used:,} total FLOPs ({flops_efficiency:.1f}% of budget)")
+        
+        num_train_steps = computed_batches
     
     # Ensure trainer runs desired number of steps
     individual.train_config.max_iters = num_train_steps
@@ -209,21 +226,30 @@ def calculate_model_flops(
     dtype = example_input.dtype
     
     def input_constructor(input_res):
-        return (torch.zeros(batch_size, seq_len, dtype=dtype),)
+        # Return a single tensor, not a tuple
+        return torch.zeros(batch_size, seq_len, dtype=dtype)
     
-    # Compute MACs for a single forward pass with this batch size
-    macs, _params = get_model_complexity_info(
-        model,
-        input_res=(batch_size, seq_len),
-        input_constructor=input_constructor,
-        as_strings=False,
-        print_per_layer_stat=False,
-        verbose=False,
-    )
-    
-    # Approximate FLOPs per forward as 2 * MACs
-    forward_flops = 2 * macs
-    # Per train step ~ 2x forward (forward+backward)
-    train_step_flops = 2 * forward_flops
-    
-    return forward_flops, train_step_flops
+    try:
+        # Compute MACs for a single forward pass with this batch size
+        macs, _params = get_model_complexity_info(
+            model,
+            input_res=(batch_size, seq_len),
+            input_constructor=input_constructor,
+            as_strings=False,
+            print_per_layer_stat=False,
+            verbose=False,
+        )
+        
+        # Check if MACs calculation was successful
+        if macs is None or macs <= 0:
+            raise ValueError(f"FLOPs calculation failed: macs={macs}. This usually means the model is incompatible with FLOPs calculation.")
+        
+        # Approximate FLOPs per forward as 2 * MACs
+        forward_flops = int(2 * macs)
+        # Per train step ~ 2x forward (forward+backward)
+        train_step_flops = int(2 * forward_flops)
+        
+        return forward_flops, train_step_flops
+        
+    except Exception as e:
+        raise ValueError(f"FLOPs calculation failed: {e}. This usually means the model is incompatible with FLOPs calculation.")

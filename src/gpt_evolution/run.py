@@ -25,6 +25,18 @@ from ..nn.variation.architecture_crossover import crossover_subgraph
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from datasets import load_dataset
+
+def validate_flops_config(training_config):
+    """Validate FLOPs budget configuration parameter."""
+    flops_budget = training_config.get("flops_budget")
+    
+    # Validate FLOPs budget
+    if flops_budget is not None:
+        if not isinstance(flops_budget, (int, float)) or flops_budget <= 0:
+            raise ValueError(f"flops_budget must be a positive number, got: {flops_budget}")
+        logging.info(f"FLOPs budget set to: {flops_budget:,}")
+    else:
+        logging.info("No FLOPs budget set, using training_total_batches")
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -113,6 +125,9 @@ if __name__ == '__main__':
 
     configure_logger(experiment_path, run_config.get("logging", {"overwrite_logs": False}))
 
+    # Validate FLOPs configuration
+    validate_flops_config(training_config)
+
     set_random_seeds(evolution_config["random_seed"])
 
     load_dataset_constant_kwargs = {"path": tokenizer_config["dataset"], "name": tokenizer_config["dataset_name"], "streaming": True}
@@ -151,7 +166,7 @@ if __name__ == '__main__':
         tokenizer.save(tokenizer_path)
 
     train_config_params = {
-        "max_iters": training_config.get("training_total_batches", training_config.get("max_iters")),
+        "max_iters": training_config.get("max_iters"),
         "device": training_config["device"],
     }
 
