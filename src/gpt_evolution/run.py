@@ -165,7 +165,7 @@ if __name__ == '__main__':
             num_train_steps=train_config_params["training_total_batches"],
             device=train_config_params["device"],
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
-            max_iter_timeout=training_config.get("max_iter_timeout", 20.0),
+            iter_timeout=training_config.get("iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
         )
 

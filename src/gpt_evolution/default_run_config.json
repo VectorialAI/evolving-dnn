@@ -52,7 +52,7 @@
       "validation_batch_size": 32,
       "evaluation_total_batches": 20,
       "loss_log_frequency": 100,
-      "max_iter_timeout": 20.0,
+      "iter_timeout": 20.0,
       "secondary_iter_timeout": 0.2
     },
     "logging": {
