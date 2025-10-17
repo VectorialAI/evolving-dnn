@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 
 import torch
 from ptflops import get_model_complexity_info
@@ -53,32 +54,30 @@ def calculate_fitness(
         import copy
         model_copy = copy.deepcopy(individual.graph_module)
         
-        # Calculate FLOPs for this model
-        forward_flops, flops_per_train_step = calculate_model_flops(
+        # Calculate FLOPs per sample for this model
+        flops_per_sample = calculate_model_flops(
             model_copy,
             batch_size,
             block_size,
             example_input
         )
         
-        if flops_per_train_step <= 0:
-            raise ValueError(f"FLOPs calculation failed for individual. Got flops_per_train_step={flops_per_train_step}. "
+        if flops_per_sample <= 0:
+            raise ValueError(f"FLOPs calculation failed for individual. Got flops_per_sample={flops_per_sample}. "
                            f"This usually means the model is incompatible with FLOPs calculation or has an error.")
         
-        computed_batches = int(flops_budget // flops_per_train_step)
-        
-        # Apply sensible constraints (min 1 batch, max 10000)
-        computed_batches = max(1, min(computed_batches, 10000))
+        # Simplified formula: batches_allotted = flops_budget / (3 * flops_per_sample * batch_size)
+        computed_batches = math.floor(flops_budget / (3 * flops_per_sample * batch_size))
         
         if computed_batches <= 0:
             computed_batches = 1
-            logging.warning(f"FLOPs budget {flops_budget} too small for model (needs {flops_per_train_step} per step). Using minimum 1 batch.")
+            logging.warning(f"FLOPs budget {flops_budget} too small for model (needs {3 * flops_per_sample * batch_size} per batch). Using minimum 1 batch.")
         
         # Log FLOPs information
-        total_flops_used = computed_batches * flops_per_train_step
+        total_flops_used = computed_batches * 3 * flops_per_sample * batch_size
         flops_efficiency = (total_flops_used / flops_budget) * 100 if flops_budget > 0 else 0
         
-        logging.info(f"Individual FLOPs: {forward_flops:,} forward, {flops_per_train_step:,} per step")
+        logging.info(f"Individual FLOPs: {flops_per_sample:,} per sample")
         logging.info(f"Training: {computed_batches} batches, {total_flops_used:,} total FLOPs ({flops_efficiency:.1f}% of budget)")
         
         num_train_steps = computed_batches
@@ -205,9 +204,9 @@ def calculate_model_flops(
     batch_size: int,
     block_size: int,
     example_input: torch.Tensor = None,
-) -> tuple[int, int]:
+) -> int:
     """
-    Calculate the number of FLOPs (floating point operations) for a model.
+    Calculate the number of FLOPs per sample for a model.
     
     Args:
         model: The model to analyze
@@ -216,7 +215,7 @@ def calculate_model_flops(
         example_input: Optional example input tensor to determine shape/dtype
         
     Returns:
-        tuple[int, int]: A tuple containing (flops_per_forward_pass, flops_per_train_step)
+        int: FLOPs per sample
     """
     if example_input is None:
         example_input = torch.zeros(1, block_size, dtype=torch.long)
@@ -244,12 +243,10 @@ def calculate_model_flops(
         if macs is None or macs <= 0:
             raise ValueError(f"FLOPs calculation failed: macs={macs}. This usually means the model is incompatible with FLOPs calculation.")
         
-        # Approximate FLOPs per forward as 2 * MACs
-        forward_flops = int(2 * macs)
-        # Per train step ~ 2x forward (forward+backward)
-        train_step_flops = int(2 * forward_flops)
+        # Simplified formula: flops_per_sample = macs * 2
+        flops_per_sample = int(macs * 2)
         
-        return forward_flops, train_step_flops
+        return flops_per_sample
         
     except Exception as e:
         raise ValueError(f"FLOPs calculation failed: {e}. This usually means the model is incompatible with FLOPs calculation.")
