@@ -161,12 +161,12 @@ if __name__ == '__main__':
             iterable_validation_dataset,
             tokenizer,
             block_size=gpt_config["block_size"],
+            total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
             num_train_steps=train_config_params["training_total_batches"],
             device=train_config_params["device"],
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
             max_iter_timeout=training_config.get("max_iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
-            total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
         )
 
     evolution = NeuralNetworkEvolution(

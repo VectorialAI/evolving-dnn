@@ -31,6 +31,8 @@ def calculate_fitness(
         iterable_train_dataset: HuggingFace iterable dataset for training
         iterable_test_dataset: HuggingFace iterable dataset for testing
         tokenizer: Tokenizer for encoding text
+        block_size: Sequence length for the model
+        total_batches_for_evaluation: Number of batches to use for evaluation
         num_train_steps: Number of training steps to perform
         device: Device to train on
         loss_log_frequency: How often to log training loss (every N iterations)
