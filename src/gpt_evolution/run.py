@@ -36,7 +36,7 @@ VOCAB_SIZE = 2000
 RANDOM_SEED = 42
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description="Run GPT Evolution experiment.")
     parser.add_argument(
         "--config",
@@ -72,6 +72,25 @@ if __name__ == '__main__':
     training_config = run_config["training"]
     gpt_config = run_config["gpt_config"]
 
+    run_experiment(
+        experiment_path,
+        run_config,
+        tokenizer_config,
+        evolution_config,
+        training_config,
+        gpt_config,
+        tokenizer_path,
+    )
+
+def run_experiment(
+    experiment_path: str,
+    run_config: dict,
+    tokenizer_config: dict,
+    evolution_config: dict,
+    training_config: dict,
+    gpt_config: dict,
+    tokenizer_path: str,
+):
     os.makedirs(experiment_path, exist_ok=True)
 
     configure_logger(experiment_path, run_config.get("logging", {"overwrite_logs": False}))
@@ -81,14 +100,28 @@ if __name__ == '__main__':
 
     set_random_seeds(evolution_config["random_seed"])
 
-    load_dataset_constant_kwargs = {"path": tokenizer_config["dataset"], "name": tokenizer_config["dataset_name"], "streaming": True}
+    load_dataset_constant_kwargs = {
+        "path": tokenizer_config["dataset"],
+        "name": tokenizer_config["dataset_name"],
+        "streaming": True,
+    }
     if "data_files_prefixes" in tokenizer_config:
         suffix = tokenizer_config["data_files_suffix"]
         train_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["train"]]
         validation_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["validation"]]
         # TODO: test if the split is needed
-        iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=train_data_files)
-        iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)
+        iterable_train_dataset = load_dataset(
+            **load_dataset_constant_kwargs,
+            split="train",
+            data_dir=tokenizer_config["data_dir"],
+            data_files=train_data_files,
+        )
+        iterable_validation_dataset = load_dataset(
+            **load_dataset_constant_kwargs,
+            split="train",
+            data_dir=tokenizer_config["data_dir"],
+            data_files=validation_data_files,
+        )
     else:
         datasets = load_dataset(**load_dataset_constant_kwargs)
         iterable_train_dataset = datasets["train"]
@@ -165,3 +198,7 @@ if __name__ == '__main__':
     evolution.run_evolution(evolution_config["num_generations"])
 
     log_best_individual(evolution, experiment_path, run_config.get("logging", {}).get("overwrite_logs", False))
+
+
+if __name__ == '__main__':
+    main()
