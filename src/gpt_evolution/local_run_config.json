@@ -1,6 +1,6 @@
 {
     "training": {
-      "max_iters": 5,
+      "training_total_batches": 5,
       "device": "cpu",
       "loss_log_frequency": 5,
       "max_iter_timeout": 20.0,

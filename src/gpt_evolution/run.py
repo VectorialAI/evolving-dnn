@@ -149,7 +149,7 @@ if __name__ == '__main__':
         tokenizer.save(tokenizer_path)
 
     train_config_params = {
-        "max_iters": training_config.get("training_total_batches", training_config.get("max_iters")),
+        "training_total_batches": training_config.get("training_total_batches"),
         "device": training_config["device"],
     }
 
@@ -161,7 +161,7 @@ if __name__ == '__main__':
             iterable_validation_dataset,
             tokenizer,
             block_size=gpt_config["block_size"],
-            num_train_steps=train_config_params["max_iters"],
+            num_train_steps=train_config_params["training_total_batches"],
             device=train_config_params["device"],
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
             max_iter_timeout=training_config.get("max_iter_timeout", 20.0),
