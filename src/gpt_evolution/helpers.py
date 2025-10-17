@@ -1,4 +1,6 @@
+import os
 import random
+import logging
 
 import numpy as np
 import torch
@@ -42,6 +44,57 @@ def deep_merge_dicts(default_dict, override_dict):
     
     _merge_recursive(result, override_dict)
     return result
+
+def validate_flops_config(training_config):
+    """Validate FLOPs budget configuration parameter."""
+    flops_budget = training_config.get("flops_budget")
+    
+    # Validate FLOPs budget
+    if flops_budget is not None:
+        if not isinstance(flops_budget, (int, float)) or flops_budget <= 0:
+            raise ValueError(f"flops_budget must be a positive number, got: {flops_budget}")
+        logging.info(f"FLOPs budget set to: {flops_budget:,}")
+    else:
+        logging.info("No FLOPs budget set, using training_total_batches")
+
+def configure_logger(experiment_path, logging_config):
+    debug_log_file = os.path.join(experiment_path, "evolution_run_debug.log")
+    info_log_file = os.path.join(experiment_path, "evolution_run.log")
+    
+    # Configure root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    
+    # Create formatter
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    
+    # Determine file mode based on config
+    file_mode = 'w' if logging_config.get("overwrite_logs", False) else 'a'
+    
+    # Handler for DEBUG and above (all messages) - goes to debug file
+    debug_handler = logging.FileHandler(debug_log_file, mode=file_mode)
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(formatter)
+    
+    # Handler for WARNING and above only - goes to warnings file
+    info_handler = logging.FileHandler(info_log_file, mode=file_mode)
+    info_handler.setLevel(logging.INFO)
+    info_handler.setFormatter(formatter)
+    
+    # Console handler for INFO and above
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    
+    # Add handlers to logger
+    logger.addHandler(debug_handler)
+    logger.addHandler(info_handler)
+    logger.addHandler(console_handler)
+
+    # Silence verbose loggers
+    # for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec"]:
+    for logger_name in ["urllib3", "fsspec"]:  
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 if __name__ == "__main__":
     default_dict = {
