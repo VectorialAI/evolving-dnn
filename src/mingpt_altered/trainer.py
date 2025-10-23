@@ -24,7 +24,7 @@ class Trainer:
         # dataloder parameters
         C.num_workers = 4
         # optimizer parameters
-        C.max_iters = None
+        C.training_total_batches = None
         C.batch_size = 64
         C.learning_rate = 3e-4
         C.betas = (0.9, 0.95)
@@ -129,6 +129,6 @@ class Trainer:
             self.iter_time = tnow
 
             # termination conditions
-            if config.max_iters is not None and self.iter_num >= config.max_iters:
+            if config.training_total_batches is not None and self.iter_num >= config.training_total_batches:
                 self.trigger_callbacks('on_train_end')
                 break
