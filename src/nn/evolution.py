@@ -35,15 +35,37 @@ class NeuralNetworkEvolution(Evolution):
         try:
             logging.info(f"Individual {individual.id} has fitness {individual.fitness}")
             if train_configs_path and graphs_path and models_path:
-                with open(os.path.join(train_configs_path, f"{individual.id}_train_config.json"), "w") as train_config_file:
+                train_config_filepath = os.path.join(train_configs_path, f"{individual.id}_train_config.json")
+                with open(train_config_filepath, "w") as train_config_file:
                     json.dump(individual.train_config.to_dict(), train_config_file, indent=4)
-                
-                if self.visualize_graphs:
-                    visualize_graph(individual.graph_module, "model_graph", os.path.join(graphs_path, f"{individual.id}_graph.svg"))
-                
-                torch.save(individual.graph_module, os.path.join(models_path, f"{individual.id}_model.pt"))
+
+                graph_filepath = os.path.join(graphs_path, f"{individual.id}_graph.svg") if self.visualize_graphs else None
+                if self.visualize_graphs and graph_filepath:
+                    visualize_graph(individual.graph_module, "model_graph", graph_filepath)
+
+                model_filepath = os.path.join(models_path, f"{individual.id}_model.pt")
+                torch.save(individual.graph_module, model_filepath)
+
+                artifacts = {
+                    "train_config": train_config_filepath if os.path.exists(train_config_filepath) else None,
+                    "graph_svg": graph_filepath if graph_filepath and os.path.exists(graph_filepath) else None,
+                    "model_state": model_filepath if os.path.exists(model_filepath) else None,
+                }
+            else:
+                artifacts = {}
+
+            self.experiment_recorder.record_individual_evaluation(
+                individual,
+                generation=self.generation,
+                artifacts=artifacts,
+            )
         except Exception:
             logging.exception(f"Error logging/saving individual {individual.id}")
+            self.experiment_recorder.record_individual_evaluation(
+                individual,
+                generation=self.generation,
+                artifacts={},
+            )
 
     def _copy_individual(self, individual: NeuralNetworkIndividual) -> NeuralNetworkIndividual:
         child = copy.deepcopy(individual)

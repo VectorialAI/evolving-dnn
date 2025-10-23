@@ -4,10 +4,29 @@ apt update && \
 apt install git software-properties-common graphviz screen rsync -y && \
 git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
 cd evolving-dnn/ && \
-git checkout refactor-for-experiments && \
+git checkout log-record-everything && \
 chmod +x run_experiment.sh && \
-./run_experiment.sh /workspace/experiments/test29
+./run_experiment.sh /workspace/experiments/experiment1
+
+Where "EXPERIMENT_NAME" (as used below) in that case would be experiment1.
 
 
 To get the output files locally:
 rsync -avz -e "ssh -p [PORT] -i ~/.ssh/id_ed25519" root@[IP.ADDRESS]:/workspace/experiments/[EXPERIMENT_NAME] experiments
+
+To get them all except the big model pytorch files, try:
+rsync -avz -e "ssh -p [PORT] -i ~/.ssh/id_ed25519" --exclude "individuals/models" root@[IP.ADDRESS]:/workspace/experiments/[EXPERIMENT_NAME] experiments
+
+
+
+
+
+Instead of ./run_experiment.sh, can run the commands yourself if you want different usage:
+
+add-apt-repository -y ppa:deadsnakes/ppa && \
+apt update && \
+apt install python3.11 python3-pip python3.11-venv python3.11-distutils -y && \
+python3.11 -m venv .venv && \
+source .venv/bin/activate && \
+pip install -r requirements.txt && \
+screen -dmS experiment python -m src.gpt_evolution.run --experiment_path $1

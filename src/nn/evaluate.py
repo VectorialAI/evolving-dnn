@@ -1,6 +1,6 @@
-import json
 import logging
 import math
+import time
 
 import torch
 from ptflops import get_model_complexity_info
@@ -24,6 +24,7 @@ def calculate_fitness(
     iter_timeout: float = 20.0,
     secondary_iter_timeout: float = 0.2,
     flops_budget: int = None,
+    validation_batch_size: int = 32,
 ) -> float:
     """
     Calculate fitness of a GPT model by training it and returning negative loss
@@ -41,6 +42,7 @@ def calculate_fitness(
         loss_log_frequency: How often to log training loss (every N iterations)
         iter_timeout: Maximum seconds per iteration before terminating
         secondary_iter_timeout: Secondary timeout for iterations that are too slow
+        validation_batch_size: Batch size to use during validation perplexity calculation
         
     Returns:
         float: Fitness score (higher is better)
@@ -111,22 +113,43 @@ def calculate_fitness(
                 raise ValueError(f"Iteration took too long: {trainer.iter_dt} seconds at iter {trainer.iter_num}")
     trainer.set_callback('on_batch_end', batch_end_callback)
     trainer.set_callback('on_train_end', batch_end_callback)
+    train_start_time = time.time()
     trainer.run()
+    training_duration_seconds = time.time() - train_start_time
 
     # Calculate perplexity on the validation set
+    eval_start_time = time.time()
     perplexity = calculate_perplexity(
-        individual.graph_module, 
+        individual.graph_module,
         iterable_test_dataset,
         tokenizer,
         block_size,
         device=device,
-        total_batches_for_evaluation=total_batches_for_evaluation
+        total_batches_for_evaluation=total_batches_for_evaluation,
+        batch_size=validation_batch_size
     )
+    evaluation_duration_seconds = time.time() - eval_start_time
 
     individual.graph_module = individual.graph_module.to('cpu')  # Move the model back to CPU, since we're not going to run it again
     if device == 'cuda': torch.cuda.empty_cache()
 
     fitness = -perplexity  # negative perplexity as fitness (lower perplexity = better) so that we can go uppies :)
+
+    individual.evaluation_metrics = {
+        "status": "completed",
+        "perplexity": perplexity,
+        "final_train_loss": float(trainer.loss.item()) if hasattr(trainer, "loss") else None,
+        "train_iterations": trainer.iter_num,
+        "train_max_samples": train_dataset.max_samples,
+        "training_duration_seconds": training_duration_seconds,
+        "evaluation_duration_seconds": evaluation_duration_seconds,
+        "device_used": device,
+        "train_batch_size": getattr(individual.train_config, "batch_size", None),
+        "validation_batch_size": validation_batch_size,
+        "iter_timeout_seconds": iter_timeout,
+        "secondary_iter_timeout_seconds": secondary_iter_timeout,
+        "evaluation_batches": total_batches_for_evaluation,
+    }
     
     return fitness
 

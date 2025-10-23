@@ -5,12 +5,14 @@ import random
 from typing import Callable
 
 from .individual import Individual
+from .experiment_recorder import ExperimentRecorder
 
 class Evolution:
     def __init__(
         self,
         population: list[Individual],
         fitness_fn: Callable[[Individual], float],
+        experiment_recorder: ExperimentRecorder,
         crossover_instead_of_mutation_rate: float = 0.5,
         mutation_fns_and_probabilities: list[tuple[Callable[[Individual], Individual], float]] = [],
         crossover_fns_and_probabilities: list[tuple[Callable[[Individual, Individual], Individual], float]] = [],
@@ -44,9 +46,10 @@ class Evolution:
         self.best_individual = None
         self.id_counter = len(self.population)
         self.visualize_graphs = visualize_graphs
-        # Add visualize_graphs to kwargs so it gets passed to crossover/mutation functions
+        self.experiment_recorder = experiment_recorder
+
         self.kwargs = kwargs
-        self.kwargs['visualize_graphs'] = visualize_graphs
+        self.kwargs['visualize_graphs'] = visualize_graphs  # Add visualize_graphs to kwargs so it gets passed to crossover/mutation functions
 
     def run_evolution(self, num_generations: int):
         """
@@ -55,6 +58,9 @@ class Evolution:
         Args:
             num_generations: Number of generations to evolve
         """
+        for individual in self.population:
+            self.experiment_recorder.record_initial_individual(individual.id, generation=self.generation)
+
         for individual in self.population:  # evaluate fitness for initial population
             self._evaluate(individual)
         
@@ -67,25 +73,36 @@ class Evolution:
             while len(new_children) < self.num_children_per_generation:
                 parent1, parent2 = random.sample(self.population, 2)  # TODO should this sample with or without replacement?
                 child = self._copy_individual(parent1)
+                # Assign a new unique identifier immediately so downstream operations use the correct id
+                child.id = self.id_counter
+                self.id_counter += 1
+                operations = []
+                strategy = "mutation"
                 try:
                     if random.random() < self.crossover_instead_of_mutation_rate:
-                        child = self._crossover(child, parent2)
+                        strategy = "crossover"
+                        child, operations = self._crossover(child, parent2)
                     else:
-                        child = self._mutate(child)
+                        child, operations = self._mutate(child)
                     successful_child = True
                 except Exception as e:
                     logging.exception("Error in crossover or mutation")
                     child.fitness = float('-inf')
                     successful_child = False
-                child.id = self.id_counter
                 logging.info(f"Created child {child.id}")
-                self.id_counter += 1
                 new_children.append(child)
+
+                self.experiment_recorder.record_child_creation(
+                    individual_id=child.id,
+                    generation=self.generation,
+                    parents=(parent1.id, parent2.id),
+                    operations=operations,
+                    strategy=strategy,
+                )
 
                 if not successful_child:
                     self._log_individual(child)
                     continue
-
                 self._evaluate(child)
 
             self.population.extend(new_children)
@@ -94,12 +111,17 @@ class Evolution:
             self._log_generation()
 
     def _evaluate(self, individual: Individual):
+        individual.evaluation_metrics = None
+        if hasattr(individual, "evaluation_error"):
+            delattr(individual, "evaluation_error")
         try:
             self._pre_evaluation(individual)
             individual.fitness = self.fitness_fn(individual)
         except Exception as e:
             logging.exception(f"Error in fitness function: {e} for individual {individual.id}")
             individual.fitness = float('-inf')  # Lowest possible fitness since fitness is negative perplexity
+            individual.evaluation_error = str(e)
+            individual.evaluation_metrics = {"status": "failed"}
             try:
                 self._handle_evaluation_error(individual)
             except Exception as e:
@@ -123,7 +145,7 @@ class Evolution:
         """
         return copy.deepcopy(individual)
 
-    def _crossover(self, child: Individual, parent: Individual) -> Individual:
+    def _crossover(self, child: Individual, parent: Individual) -> tuple[Individual, list[dict]]:
         """
         Perform crossover between two parents
         
@@ -135,13 +157,22 @@ class Evolution:
             Child
         """
         logging.info(f"Crossover between {child.id} and {parent.id}")
+        applied_operations: list[dict] = []
         for crossover_fn, probability in self.crossover_fns_and_probabilities:
             if random.random() < probability:
                 logging.info(f"Crossover between {child.id} and {parent.id} with {crossover_fn.__name__}")
                 crossover_fn(child, parent, **self.kwargs)
-        return child
+                applied_operations.append(
+                    {
+                        "type": "crossover",
+                        "name": crossover_fn.__name__,
+                        "probability": probability,
+                        "with_parent_id": parent.id,
+                    }
+                )
+        return child, applied_operations
 
-    def _mutate(self, child: Individual) -> Individual:
+    def _mutate(self, child: Individual) -> tuple[Individual, list[dict]]:
         """
         Mutate a single individual
         
@@ -152,11 +183,19 @@ class Evolution:
             Mutated child individual
         """
         logging.info(f"Mutating {child.id}")
+        applied_operations: list[dict] = []
         for mutation_fn, probability in self.mutation_fns_and_probabilities:
             if random.random() < probability:
                 logging.info(f"Mutating {child.id} with {mutation_fn.__name__}")
                 mutation_fn(child, **self.kwargs)
-        return child
+                applied_operations.append(
+                    {
+                        "type": "mutation",
+                        "name": mutation_fn.__name__,
+                        "probability": probability,
+                    }
+                )
+        return child, applied_operations
     
     def _selection(self) -> list[Individual]:
         """Select individuals for breeding based on fitness scores"""
@@ -193,3 +232,25 @@ class Evolution:
         logging.info(f"  Avg Fitness in Gen: {avg_fitness:.4f}")
         if self.best_individual:
             logging.info(f"  Best Individual Overall (fitness: {self.best_individual.fitness}, id: {self.best_individual.id}): {self.best_individual.train_config}")
+
+        population_snapshot = []
+        for individual in self.population:
+            fitness_value = individual.fitness
+            if fitness_value is None or not math.isfinite(fitness_value):
+                fitness_value = None
+            population_snapshot.append({"id": individual.id, "fitness": fitness_value})
+
+        max_fitness_value = current_best_fitness_in_gen if math.isfinite(current_best_fitness_in_gen) else None
+        avg_fitness_value = avg_fitness if math.isfinite(avg_fitness) else None
+        best_overall_id = self.best_individual.id if self.best_individual else None
+        best_in_gen_id = current_best_individual_in_gen.id if current_best_individual_in_gen else None
+
+        summary_payload = {
+            "population_size": len(self.population),
+            "max_fitness": max_fitness_value,
+            "average_fitness": avg_fitness_value,
+            "best_individual_id": best_in_gen_id,
+            "best_overall_individual_id": best_overall_id,
+            "population_snapshot": population_snapshot,
+        }
+        self.experiment_recorder.record_generation(self.generation, summary_payload)
