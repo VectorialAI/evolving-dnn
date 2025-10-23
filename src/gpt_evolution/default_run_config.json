@@ -51,6 +51,7 @@
       "device": "cuda",
       "validation_batch_size": 32,
       "evaluation_total_batches": 20,
+      "flops_budget": 1e13,
       "loss_log_frequency": 100,
       "iter_timeout": 20.0,
       "secondary_iter_timeout": 0.2

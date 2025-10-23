@@ -1,7 +1,9 @@
 import json
 import logging
+import math
 
 import torch
+from ptflops import get_model_complexity_info
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -21,6 +23,7 @@ def calculate_fitness(
     loss_log_frequency: int = 100,
     iter_timeout: float = 20.0,
     secondary_iter_timeout: float = 0.2,
+    flops_budget: int = None,
 ) -> float:
     """
     Calculate fitness of a GPT model by training it and returning negative loss
@@ -43,6 +46,47 @@ def calculate_fitness(
         float: Fitness score (higher is better)
     """
     
+    # If FLOPs budget is set, compute per-individual training steps
+    if flops_budget is not None:
+        # Get the example input from the FX graph
+        example_input = getattr(individual.graph_module, "example_input", None)
+        batch_size = int(getattr(individual.train_config, "batch_size", 1))
+        
+        # Create a copy of the model for FLOPs calculation to avoid corrupting the original
+        import copy
+        model_copy = copy.deepcopy(individual.graph_module)
+        
+        # Calculate FLOPs per sample for this model
+        flops_per_sample = calculate_model_flops(
+            model_copy,
+            batch_size,
+            block_size,
+            example_input
+        )
+        
+        if flops_per_sample <= 0:
+            raise ValueError(f"FLOPs calculation failed for individual. Got flops_per_sample={flops_per_sample}. "
+                           f"This usually means the model is incompatible with FLOPs calculation or has an error.")
+        
+        # Simplified formula: batches_allotted = flops_budget / (3 * flops_per_sample * batch_size)
+        computed_batches = math.floor(flops_budget / (3 * flops_per_sample * batch_size))
+        
+        if computed_batches <= 0:
+            computed_batches = 1
+            logging.warning(f"FLOPs budget {flops_budget} too small for model (needs {3 * flops_per_sample * batch_size} per batch). Using minimum 1 batch.")
+        
+        # Log FLOPs information
+        total_flops_used = computed_batches * 3 * flops_per_sample * batch_size
+        flops_efficiency = (total_flops_used / flops_budget) * 100 if flops_budget > 0 else 0
+        
+        logging.info(f"Individual FLOPs: {flops_per_sample:,} per sample")
+        logging.info(f"Training: {computed_batches} batches, {total_flops_used:,} total FLOPs ({flops_efficiency:.1f}% of budget)")
+        
+        num_train_steps = computed_batches
+    
+    # Ensure trainer runs desired number of steps
+    individual.train_config.max_iters = num_train_steps
+
     # Create train dataset
     train_dataset = HuggingFaceIterableDataset(
         iterable_train_dataset,
@@ -156,3 +200,55 @@ def calculate_perplexity(
     perplexity = torch.exp(torch.tensor(avg_loss)).item()
     logging.debug(f"perplexity: {perplexity}")
     return perplexity
+
+def calculate_model_flops(
+    model: torch.nn.Module,
+    batch_size: int,
+    block_size: int,
+    example_input: torch.Tensor = None,
+) -> int:
+    """
+    Calculate the number of FLOPs per sample for a model.
+    
+    Args:
+        model: The model to analyze
+        batch_size: Batch size to use for calculation
+        block_size: Sequence length for the model
+        example_input: Optional example input tensor to determine shape/dtype
+        
+    Returns:
+        int: FLOPs per sample
+    """
+    if example_input is None:
+        example_input = torch.zeros(1, block_size, dtype=torch.long)
+    
+    # Build input that matches the model's batch size
+    seq_len = int(example_input.shape[1]) if example_input.dim() >= 2 else int(block_size)
+    dtype = example_input.dtype
+    
+    def input_constructor(input_res):
+        # Return a single tensor, not a tuple
+        return torch.zeros(batch_size, seq_len, dtype=dtype)
+    
+    try:
+        # Compute MACs for a single forward pass with this batch size
+        macs, _params = get_model_complexity_info(
+            model,
+            input_res=(batch_size, seq_len),
+            input_constructor=input_constructor,
+            as_strings=False,
+            print_per_layer_stat=False,
+            verbose=False,
+        )
+        
+        # Check if MACs calculation was successful
+        if macs is None or macs <= 0:
+            raise ValueError(f"FLOPs calculation failed: macs={macs}. This usually means the model is incompatible with FLOPs calculation.")
+        
+        # Simplified formula: flops_per_sample = macs * 2
+        flops_per_sample = int(macs * 2)
+        
+        return flops_per_sample
+        
+    except Exception as e:
+        raise ValueError(f"FLOPs calculation failed: {e}. This usually means the model is incompatible with FLOPs calculation.")

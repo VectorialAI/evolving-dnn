@@ -5,7 +5,7 @@ import json
 import logging
 
 from ..gpt_evolution.initial_population import generate_initial_population
-from ..gpt_evolution.helpers import set_random_seeds, deep_merge_dicts
+from ..gpt_evolution.helpers import set_random_seeds, deep_merge_dicts, configure_logger, validate_flops_config
 from ..nn.evaluate import calculate_fitness
 from ..nn.individual import NeuralNetworkIndividual
 from ..nn.evolution import NeuralNetworkEvolution
@@ -25,6 +25,7 @@ from ..nn.variation.architecture_crossover import crossover_subgraph
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 from datasets import load_dataset
+
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
@@ -34,43 +35,6 @@ import torch
 VOCAB_SIZE = 2000
 RANDOM_SEED = 42
 
-def configure_logger(experiment_path, logging_config):
-    debug_log_file = os.path.join(experiment_path, "evolution_run_debug.log")
-    info_log_file = os.path.join(experiment_path, "evolution_run.log")
-    
-    # Configure root logger
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    
-    # Create formatter
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    
-    # Determine file mode based on config
-    file_mode = 'w' if logging_config.get("overwrite_logs", False) else 'a'
-    
-    # Handler for DEBUG and above (all messages) - goes to debug file
-    debug_handler = logging.FileHandler(debug_log_file, mode=file_mode)
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(formatter)
-    
-    # Handler for WARNING and above only - goes to warnings file
-    info_handler = logging.FileHandler(info_log_file, mode=file_mode)
-    info_handler.setLevel(logging.INFO)
-    info_handler.setFormatter(formatter)
-    
-    # Console handler for INFO and above
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    
-    # Add handlers to logger
-    logger.addHandler(debug_handler)
-    logger.addHandler(info_handler)
-    logger.addHandler(console_handler)
-
-    # Silence verbose loggers
-    for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec"]:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run GPT Evolution experiment.")
@@ -112,6 +76,9 @@ if __name__ == '__main__':
 
     configure_logger(experiment_path, run_config.get("logging", {"overwrite_logs": False}))
 
+    # Validate FLOPs configuration
+    validate_flops_config(training_config)
+
     set_random_seeds(evolution_config["random_seed"])
 
     load_dataset_constant_kwargs = {"path": tokenizer_config["dataset"], "name": tokenizer_config["dataset_name"], "streaming": True}
@@ -119,6 +86,7 @@ if __name__ == '__main__':
         suffix = tokenizer_config["data_files_suffix"]
         train_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["train"]]
         validation_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["validation"]]
+        # TODO: test if the split is needed
         iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=train_data_files)
         iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)
     else:
@@ -153,6 +121,8 @@ if __name__ == '__main__':
         "device": training_config["device"],
     }
 
+    # Note: FLOPs-based batch computation is applied per-individual below in fitness_wrapper
+
     # Create a wrapper for calculate_fitness that only takes individual
     def fitness_wrapper(individual: NeuralNetworkIndividual) -> float:
         return calculate_fitness(
@@ -167,6 +137,8 @@ if __name__ == '__main__':
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
             iter_timeout=training_config.get("iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
+            total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
+            flops_budget=training_config.get("flops_budget"),
         )
 
     evolution = NeuralNetworkEvolution(
