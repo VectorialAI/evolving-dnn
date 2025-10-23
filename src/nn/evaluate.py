@@ -9,18 +9,17 @@ from ..mingpt_altered.trainer import Trainer
 from .individual import NeuralNetworkIndividual
 from .dataset import HuggingFaceIterableDataset
 
-TOTAL_BATCHES_FOR_EVALUATION = 20
-
 def calculate_fitness(
     individual: NeuralNetworkIndividual,
     iterable_train_dataset,
     iterable_test_dataset, 
     tokenizer,
     block_size: int,
+    total_batches_for_evaluation: int = 20,
     num_train_steps: int = 100,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
     loss_log_frequency: int = 100,
-    max_iter_timeout: float = 20.0,
+    iter_timeout: float = 20.0,
     secondary_iter_timeout: float = 0.2,
 ) -> float:
     """
@@ -32,10 +31,12 @@ def calculate_fitness(
         iterable_train_dataset: HuggingFace iterable dataset for training
         iterable_test_dataset: HuggingFace iterable dataset for testing
         tokenizer: Tokenizer for encoding text
+        block_size: Sequence length for the model
+        total_batches_for_evaluation: Number of batches to use for evaluation
         num_train_steps: Number of training steps to perform
         device: Device to train on
         loss_log_frequency: How often to log training loss (every N iterations)
-        max_iter_timeout: Maximum seconds per iteration before terminating
+        iter_timeout: Maximum seconds per iteration before terminating
         secondary_iter_timeout: Secondary timeout for iterations that are too slow
         
     Returns:
@@ -54,7 +55,7 @@ def calculate_fitness(
     trainer = Trainer(individual.train_config, individual.graph_module, train_dataset)
     def batch_end_callback(trainer):
         # Use timeout values passed from run config
-        if trainer.iter_dt > max_iter_timeout:  # if it even has one that's this bad, just kill it
+        if trainer.iter_dt > iter_timeout:  # if it even has one that's this bad, just kill it
             raise ValueError(f"Iteration took too long: {trainer.iter_dt} seconds at iter {trainer.iter_num}")
         if trainer.iter_num % loss_log_frequency == 0:  # Use configurable frequency
             logging.debug(f"iter_dt {trainer.iter_dt * 1000:.2f}ms; iter {trainer.iter_num}: train loss {trainer.loss.item():.5f}")
@@ -74,7 +75,8 @@ def calculate_fitness(
         iterable_test_dataset,
         tokenizer,
         block_size,
-        device=device
+        device=device,
+        total_batches_for_evaluation=total_batches_for_evaluation
     )
 
     individual.graph_module = individual.graph_module.to('cpu')  # Move the model back to CPU, since we're not going to run it again
@@ -90,7 +92,8 @@ def calculate_perplexity(
     tokenizer,
     block_size: int,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-    batch_size: int = 32
+    batch_size: int = 32,
+    total_batches_for_evaluation: int = 20
 ) -> float:
     """
     Calculate perplexity of a GPT model on the provided data
@@ -115,7 +118,7 @@ def calculate_perplexity(
         iterable_test_dataset,
         tokenizer,
         block_size,
-        max_samples=TOTAL_BATCHES_FOR_EVALUATION * batch_size  # Limit samples for evaluation
+        max_samples=total_batches_for_evaluation * batch_size  # Limit samples for evaluation
     )
     
     # Create DataLoader
@@ -132,7 +135,7 @@ def calculate_perplexity(
     # Disable gradient computation for efficiency
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
-            if i >= TOTAL_BATCHES_FOR_EVALUATION:
+            if i >= total_batches_for_evaluation:
                 break
             idx, targets = batch
             idx, targets = idx.to(device), targets.to(device)

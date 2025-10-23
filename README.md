@@ -115,7 +115,7 @@ population = generate_initial_population(
         "head_bounds": (2, 5), 
         "embed_bounds": (128, 512)
     },
-    train_config_params={"max_iters": 100, "device": "cpu"}
+    train_config_params={"training_total_batches": 100, "device": "cpu"}
 )
 
 # Setup evolution
@@ -157,7 +157,7 @@ gpt_config_params = {
 
 ```python
 train_config_params = {
-    "max_iters": 100,            # Training iterations
+    "training_total_batches": 100,            # Training iterations
     "device": "cpu",             # Device (cpu/cuda)
     "batch_size_bounds": (32, 128),
     "learning_rate_bounds": (1e-5, 1e-3),
