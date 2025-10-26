@@ -99,11 +99,15 @@ def calculate_fitness(
     
     # Run training
     trainer = Trainer(individual.train_config, individual.graph_module, train_dataset)
-    def batch_end_callback(trainer):
+    loss_curve = []
+
+    def batch_or_end_callback(trainer):
+        event = getattr(trainer, "_current_callback_event", "on_batch_end")
+
         # Use timeout values passed from run config
         if trainer.iter_dt > iter_timeout:  # if it even has one that's this bad, just kill it
             raise ValueError(f"Iteration took too long: {trainer.iter_dt} seconds at iter {trainer.iter_num}")
-        if trainer.iter_num % loss_log_frequency == 0:  # Use configurable frequency
+        if event == "on_batch_end" and trainer.iter_num % loss_log_frequency == 0:  # Use configurable frequency
             logging.debug(f"iter_dt {trainer.iter_dt * 1000:.2f}ms; iter {trainer.iter_num}: train loss {trainer.loss.item():.5f}")
 
             # # TODO better to do some averaging here instead of just checking 1/100
@@ -111,8 +115,20 @@ def calculate_fitness(
             if trainer.iter_dt > secondary_iter_timeout:  # Do it here so less likely that a random slow iteration will cause the entire train to fail
                 print("secondary_timeout", secondary_iter_timeout)
                 raise ValueError(f"Iteration took too long: {trainer.iter_dt} seconds at iter {trainer.iter_num}")
-    trainer.set_callback('on_batch_end', batch_end_callback)
-    trainer.set_callback('on_train_end', batch_end_callback)
+
+        if event == "on_batch_end":
+            total_tokens = getattr(trainer, "total_tokens_processed", None)
+            last_loss = getattr(trainer, "last_batch_loss", None)
+            if total_tokens is not None and last_loss is not None:
+                loss_curve.append(
+                    {
+                        "tokens_processed": int(total_tokens),
+                        "loss": float(last_loss),
+                    }
+                )
+
+    trainer.set_callback('on_batch_end', batch_or_end_callback)
+    trainer.set_callback('on_train_end', batch_or_end_callback)
     train_start_time = time.time()
     trainer.run()
     training_duration_seconds = time.time() - train_start_time
@@ -149,6 +165,8 @@ def calculate_fitness(
         "iter_timeout_seconds": iter_timeout,
         "secondary_iter_timeout_seconds": secondary_iter_timeout,
         "evaluation_batches": total_batches_for_evaluation,
+        "loss_curve": loss_curve,
+        "total_tokens_processed": getattr(trainer, "total_tokens_processed", None),
     }
     
     return fitness

@@ -6,6 +6,11 @@ import os
 import torch
 from torch.fx import Graph
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from ..evolution import Evolution
 from .individual import NeuralNetworkIndividual
 from .visualization import visualize_graph
@@ -28,8 +33,9 @@ class NeuralNetworkEvolution(Evolution):
         train_configs_path = os.path.join(experiment_individuals_path, "train_configs")
         graphs_path = os.path.join(experiment_individuals_path, "graphs")
         models_path = os.path.join(experiment_individuals_path, "models")
+        plots_path = os.path.join(experiment_individuals_path, "plots")
 
-        for path in [train_configs_path, graphs_path, models_path]:
+        for path in [train_configs_path, graphs_path, models_path, plots_path]:
             os.makedirs(path, exist_ok=True)
         
         try:
@@ -46,10 +52,20 @@ class NeuralNetworkEvolution(Evolution):
                 model_filepath = os.path.join(models_path, f"{individual.id}_model.pt")
                 torch.save(individual.graph_module, model_filepath)
 
+                plot_filepath = None
+                loss_curve = None
+                if hasattr(individual, "evaluation_metrics"):
+                    loss_curve = individual.evaluation_metrics.get("loss_curve")
+                if loss_curve:
+                    plot_candidate = os.path.join(plots_path, f"{individual.id}_training_loss.png")
+                    if self._save_loss_curve_plot(loss_curve, plot_candidate, individual.id):
+                        plot_filepath = plot_candidate
+
                 artifacts = {
                     "train_config": train_config_filepath if os.path.exists(train_config_filepath) else None,
                     "graph_svg": graph_filepath if graph_filepath and os.path.exists(graph_filepath) else None,
                     "model_state": model_filepath if os.path.exists(model_filepath) else None,
+                    "training_loss_plot": plot_filepath if plot_filepath and os.path.exists(plot_filepath) else None,
                 }
             else:
                 artifacts = {}
@@ -83,3 +99,37 @@ class NeuralNetworkEvolution(Evolution):
         logging.debug(log_msg)
 
         return child
+
+    def _save_loss_curve_plot(self, loss_curve, filepath: str, individual_id: int) -> bool:
+        try:
+            tokens = []
+            losses = []
+            for point in loss_curve:
+                if not isinstance(point, dict):
+                    continue
+                token_val = point.get("tokens_processed")
+                loss_val = point.get("loss")
+                if token_val is None or loss_val is None:
+                    continue
+                tokens.append(token_val)
+                losses.append(loss_val)
+
+            if not tokens or not losses:
+                return False
+
+            paired = sorted(zip(tokens, losses), key=lambda pair: pair[0])
+            tokens_sorted, losses_sorted = zip(*paired)
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.plot(tokens_sorted, losses_sorted, linewidth=1.5)
+            ax.set_title(f"Individual {individual_id} Training Loss")
+            ax.set_xlabel("Tokens Processed")
+            ax.set_ylabel("Training Loss")
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(filepath, bbox_inches="tight")
+            plt.close(fig)
+            return True
+        except Exception:
+            logging.exception("Failed to generate loss curve plot for individual %s", individual_id)
+            return False

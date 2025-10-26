@@ -6,3 +6,4 @@ numpy==2.2.4
 tokenizers==0.21.1
 datasets>=3.6.0
 ptflops==0.7.4
+matplotlib==3.9.2

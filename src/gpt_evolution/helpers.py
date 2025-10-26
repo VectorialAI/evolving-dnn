@@ -92,7 +92,7 @@ def configure_logger(experiment_path, logging_config):
     logger.addHandler(console_handler)
 
     # Silence verbose loggers
-    for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec"]:
+    for logger_name in ["urllib3", "datasets", "huggingface_hub", "fsspec", "matplotlib"]:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 if __name__ == "__main__":
