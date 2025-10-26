@@ -137,7 +137,6 @@ if __name__ == '__main__':
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
             iter_timeout=training_config.get("iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
-            total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
             flops_budget=training_config.get("flops_budget"),
         )
 
