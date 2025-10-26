@@ -85,7 +85,7 @@ def calculate_fitness(
         num_train_steps = computed_batches
     
     # Ensure trainer runs desired number of steps
-    individual.train_config.max_iters = num_train_steps
+    individual.train_config.training_total_batches = num_train_steps
 
     # Create train dataset
     train_dataset = HuggingFaceIterableDataset(
