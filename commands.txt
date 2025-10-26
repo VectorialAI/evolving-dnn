@@ -4,7 +4,7 @@ apt update && \
 apt install git software-properties-common graphviz screen rsync -y && \
 git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
 cd evolving-dnn/ && \
-git checkout log-record-everything && \
+git checkout main && \
 chmod +x run_experiment.sh && \
 ./run_experiment.sh /workspace/experiments/experiment1
 
