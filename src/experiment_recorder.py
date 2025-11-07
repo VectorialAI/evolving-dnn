@@ -97,7 +97,7 @@ class ExperimentRecorder:
         )
         self._save()
 
-    def record_individual_evaluation(
+    def record_individual_evaluation( # TODO this should not include nn.individual.py stuff in this file, but we should create an inherited class of this in nn package which does
         self,
         individual: Any,
         generation: int,
@@ -125,8 +125,20 @@ class ExperimentRecorder:
             "param_count": getattr(individual, "param_count", None),
         }
 
+        # Extract loss_curve before sanitizing metrics
+        loss_curve = None
         if hasattr(individual, "evaluation_metrics"):
-            evaluation_record["metrics"] = self._sanitize(individual.evaluation_metrics)
+            metrics_copy = copy.deepcopy(individual.evaluation_metrics)
+            loss_curve = metrics_copy.pop("loss_curve", None)
+            evaluation_record["metrics"] = self._sanitize(metrics_copy)
+            
+            # Save loss curve to separate file if it exists
+            if loss_curve:
+                self._save_loss_curve(individual.id, generation, loss_curve)
+                # Store reference to loss curve file in artifacts
+                loss_curve_filename = f"loss_curve_ind{individual.id}_gen{generation}.json"
+                entry.setdefault("artifacts", {})
+                entry["artifacts"]["loss_curve"] = loss_curve_filename
 
         if hasattr(individual, "evaluation_error"):
             evaluation_record["error"] = individual.evaluation_error
@@ -192,6 +204,23 @@ class ExperimentRecorder:
             return os.path.relpath(path, self.experiment_path)
         except ValueError:
             return path
+
+    def _save_loss_curve(self, individual_id: int, generation: int, loss_curve: list) -> None:
+        """Save loss curve data to a separate JSON file."""
+        filename = f"loss_curve_ind{individual_id}_gen{generation}.json"
+        filepath = os.path.join(self.experiment_path, filename)
+        temp_filepath = filepath + ".tmp"
+        
+        loss_curve_data = {
+            "individual_id": individual_id,
+            "generation": generation,
+            "timestamp": _isoformat(_utc_now()),
+            "loss_curve": self._sanitize(loss_curve),
+        }
+        
+        with open(temp_filepath, "w", encoding="utf-8") as f:
+            json.dump(loss_curve_data, f, indent=2, sort_keys=False)
+        os.replace(temp_filepath, filepath)
 
     def _save(self) -> None:
         temp_path = self.record_path + ".tmp"
