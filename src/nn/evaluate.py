@@ -220,8 +220,6 @@ def calculate_perplexity(
     # Disable gradient computation for efficiency
     with torch.no_grad():
         for i, batch in enumerate(test_loader):
-            if i >= total_batches_for_evaluation:
-                break
             idx, targets = batch
             idx, targets = idx.to(device), targets.to(device)
             
@@ -232,9 +230,13 @@ def calculate_perplexity(
             # Accumulate loss (weighted by number of tokens)
             total_loss += loss.item() * targets.numel()
             total_tokens += targets.numel()
+
+            avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+            if i < total_batches_for_evaluation - 1:
+                logging.debug(f"intermediate avg_loss: {avg_loss}")
+            else:
+                break
     
-    # Calculate average loss
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
     logging.debug(f"avg_loss: {avg_loss}")
     
     # Perplexity is exp(average negative log likelihood)
