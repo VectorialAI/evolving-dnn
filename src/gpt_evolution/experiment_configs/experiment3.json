@@ -1,0 +1,11 @@
+{
+    "evolution": {
+        "target_population_size": 50,
+        "num_children_per_generation": 50,
+        "num_generations": 20
+    },
+    "training": {
+        "training_total_batches": 0,
+        "flops_budget": null
+    }
+}
