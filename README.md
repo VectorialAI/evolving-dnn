@@ -14,13 +14,14 @@ The project uses evolutionary algorithms to:
 
 ```
 src/
-├── evolution.py      # Core evolutionary algorithm framework
-├── individual.py     # Base individual class
+├── evolution.py               # Core evolutionary algorithm framework
+├── experiment_recorder.py     # Records experiment data
+├── individual.py              # Base individual class
 ├── mingpt_altered/   # Modified minGPT implementation
 │   ├── model.py
 │   ├── trainer.py
 │   └── utils.py
-├── nn/               # Neural network specific implementations
+├── nn/                        # Neural network specific implementations
 │   ├── core.py                     # Graph representation utilities
 │   ├── individual.py               # Neural network individual class
 │   ├── individual_graph_module.py  # PyTorch FX graph module wrapper
@@ -34,7 +35,7 @@ src/
 │       ├── architecture_adaptation.py   # Architecture adaptation operations
 │       ├── hyperparam_variation.py      # Hyperparameter mutations/crossover
 │       └── utils.py                     # Helper functions for graph manipulation
-└── gpt_evolution/    # GPT-specific evolution setup
+└── gpt_evolution/             # GPT-specific evolution setup
     ├── run.py                      # Main execution script
     ├── initial_population.py       # Generate initial GPT population
     ├── helpers.py                  # Helper functions for GPT evolution execution

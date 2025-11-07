@@ -3,6 +3,11 @@ import argparse
 
 import json
 import logging
+import platform
+import subprocess
+import sys
+
+from ..experiment_recorder import ExperimentRecorder
 
 from ..gpt_evolution.initial_population import generate_initial_population
 from ..gpt_evolution.helpers import set_random_seeds, deep_merge_dicts, configure_logger, validate_flops_config
@@ -36,7 +41,7 @@ VOCAB_SIZE = 2000
 RANDOM_SEED = 42
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description="Run GPT Evolution experiment.")
     parser.add_argument(
         "--config",
@@ -72,6 +77,58 @@ if __name__ == '__main__':
     training_config = run_config["training"]
     gpt_config = run_config["gpt_config"]
 
+    experiment_recorder = ExperimentRecorder(experiment_path, run_config)
+    experiment_recorder.update_system_info(
+        {
+            "python_version": sys.version,
+            "platform": platform.platform(),
+            "torch_version": torch.__version__,
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        }
+    )
+    experiment_recorder.update_run_metadata(
+        cli_args={
+            "config": args.config,
+            "experiment_path": args.experiment_path,
+            "tokenizer_path": args.tokenizer_path,
+        }
+    )
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=os.getcwd()).decode("utf-8").strip()
+        experiment_recorder.update_run_metadata(git_commit=git_commit)
+    except Exception:
+        logging.debug("Unable to determine git commit for experiment metadata", exc_info=True)
+
+    try:
+        run_experiment(
+            experiment_path,
+            run_config,
+            tokenizer_config,
+            evolution_config,
+            training_config,
+            gpt_config,
+            tokenizer_path,
+            experiment_recorder,
+        )
+        run_status = "completed"
+    except Exception:
+        run_status = "failed"
+        logging.exception("Unhandled exception during evolution run")
+        raise
+    finally:
+        experiment_recorder.finalize(status=run_status)
+
+def run_experiment(
+    experiment_path: str,
+    run_config: dict,
+    tokenizer_config: dict,
+    evolution_config: dict,
+    training_config: dict,
+    gpt_config: dict,
+    tokenizer_path: str,
+    experiment_recorder: ExperimentRecorder,
+):
     os.makedirs(experiment_path, exist_ok=True)
 
     configure_logger(experiment_path, run_config.get("logging", {"overwrite_logs": False}))
@@ -81,25 +138,51 @@ if __name__ == '__main__':
 
     set_random_seeds(evolution_config["random_seed"])
 
-    load_dataset_constant_kwargs = {"path": tokenizer_config["dataset"], "name": tokenizer_config["dataset_name"], "streaming": True}
+    load_dataset_constant_kwargs = {
+        "path": tokenizer_config["dataset"],
+        "name": tokenizer_config["dataset_name"],
+        "streaming": True,
+    }
     if "data_files_prefixes" in tokenizer_config:
         suffix = tokenizer_config["data_files_suffix"]
         train_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["train"]]
         validation_data_files = [f"{prefix}{suffix}" for prefix in tokenizer_config["data_files_prefixes"]["validation"]]
         # TODO: test if the split is needed
-        iterable_train_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=train_data_files)
-        iterable_validation_dataset = load_dataset(**load_dataset_constant_kwargs, split="train", data_dir=tokenizer_config["data_dir"], data_files=validation_data_files)
+        iterable_train_dataset = load_dataset(
+            **load_dataset_constant_kwargs,
+            split="train",
+            data_dir=tokenizer_config["data_dir"],
+            data_files=train_data_files,
+        )
+        iterable_validation_dataset = load_dataset(
+            **load_dataset_constant_kwargs,
+            split="train",
+            data_dir=tokenizer_config["data_dir"],
+            data_files=validation_data_files,
+        )
+        dataset_metadata = {
+            "train_files": train_data_files,
+            "validation_files": validation_data_files,
+            "data_dir": tokenizer_config["data_dir"],
+        }
     else:
         datasets = load_dataset(**load_dataset_constant_kwargs)
         iterable_train_dataset = datasets["train"]
         iterable_validation_dataset = datasets["validation"]
+        dataset_metadata = {
+            "dataset_split_keys": list(datasets.keys()),
+        }
 
-    if not tokenizer_path:
-        tokenizer_path = os.path.join(experiment_path, tokenizer_config["tokenizer_filename"])
+    experiment_recorder.update_run_metadata(dataset=dataset_metadata)
+
+    tokenizer_path = tokenizer_path or os.path.join(experiment_path, tokenizer_config["tokenizer_filename"])
+    tokenizer_copy_path = None
+
     if os.path.exists(tokenizer_path):
         logging.info("Loading tokenizer from file")
         tokenizer = Tokenizer.from_file(tokenizer_path)
-        tokenizer.save(os.path.join(experiment_path, tokenizer_config["tokenizer_filename"]))  # bring to new experiment path for cohesive storage
+        tokenizer_copy_path = os.path.join(experiment_path, tokenizer_config["tokenizer_filename"])
+        tokenizer.save(tokenizer_copy_path)  # bring to new experiment path for cohesive storage
     else:
         tokenizer = Tokenizer(BPE())
         tokenizer.pre_tokenizer = Whitespace()
@@ -115,11 +198,23 @@ if __name__ == '__main__':
         
         tokenizer.train_from_iterator(text_generator(), trainer=BpeTrainer(vocab_size=tokenizer_config["vocab_size"]))
         tokenizer.save(tokenizer_path)
+        tokenizer_copy_path = tokenizer_path
+
+    tokenizer_metadata = {
+        "path": tokenizer_path,
+        "filename": tokenizer_config["tokenizer_filename"],
+        "vocab_size": tokenizer_config["vocab_size"],
+        "training_samples": tokenizer_config.get("tokenizer_training_samples"),
+    }
+    if tokenizer_copy_path and tokenizer_copy_path != tokenizer_path:
+        tokenizer_metadata["copied_to_experiment"] = tokenizer_copy_path
+    experiment_recorder.update_run_metadata(tokenizer=tokenizer_metadata)
 
     train_config_params = {
         "training_total_batches": training_config.get("training_total_batches"),
         "device": training_config["device"],
     }
+    experiment_recorder.update_system_info({"requested_training_device": training_config["device"]})
 
     # Note: FLOPs-based batch computation is applied per-individual below in fitness_wrapper
 
@@ -137,8 +232,8 @@ if __name__ == '__main__':
             loss_log_frequency=training_config.get("loss_log_frequency", 100),
             iter_timeout=training_config.get("iter_timeout", 20.0),
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
-            total_batches_for_evaluation=training_config.get("evaluation_total_batches", 20),
             flops_budget=training_config.get("flops_budget"),
+            validation_batch_size=training_config.get("validation_batch_size", 32),
         )
 
     evolution = NeuralNetworkEvolution(
@@ -149,6 +244,7 @@ if __name__ == '__main__':
             train_config_params,
         ),
         fitness_fn=fitness_wrapper,
+        experiment_recorder=experiment_recorder,
         crossover_instead_of_mutation_rate=evolution_config["crossover_instead_of_mutation_rate"],
         mutation_fns_and_probabilities=[  # These need to be imported above for it to work
             (globals()[name], prob) for name, prob in evolution_config["mutation_probabilities"].items()
@@ -161,8 +257,14 @@ if __name__ == '__main__':
         experiment_path=experiment_path,
         visualize_graphs=run_config.get("visualization", True),
         max_subgraph_attempts=evolution_config.get("max_subgraph_attempts", 100),
-        unremovable_node_targets=evolution_config.get("unremovable_node_targets", [])
+        unremovable_node_targets=evolution_config.get("unremovable_node_targets", []),
     )
     evolution.run_evolution(evolution_config["num_generations"])
 
     log_best_individual(evolution, experiment_path, run_config.get("logging", {}).get("overwrite_logs", False))
+    if evolution.best_individual:
+        experiment_recorder.update_run_metadata(best_individual_id=evolution.best_individual.id)
+
+
+if __name__ == '__main__':
+    main()

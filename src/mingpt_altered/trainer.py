@@ -57,6 +57,10 @@ class Trainer:
         self.iter_num = 0
         self.iter_time = 0.0
         self.iter_dt = 0.0
+        self.total_tokens_processed = 0
+        self.last_tokens_processed = 0
+        self.last_batch_loss = None
+        self._current_callback_event = None
 
     def add_callback(self, onevent: str, callback):
         self.callbacks[onevent].append(callback)
@@ -65,8 +69,10 @@ class Trainer:
         self.callbacks[onevent] = [callback]
 
     def trigger_callbacks(self, onevent: str):
+        self._current_callback_event = onevent
         for callback in self.callbacks.get(onevent, []):
             callback(self)
+        self._current_callback_event = None
 
     def run(self):
         model, config = self.model, self.config
@@ -121,6 +127,11 @@ class Trainer:
             self.loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
             self.optimizer.step()
+
+            tokens_in_batch = y.numel()
+            self.total_tokens_processed += tokens_in_batch
+            self.last_tokens_processed = tokens_in_batch
+            self.last_batch_loss = float(self.loss.item())
 
             self.trigger_callbacks('on_batch_end')
             self.iter_num += 1
