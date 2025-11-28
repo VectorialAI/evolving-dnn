@@ -134,11 +134,9 @@ class ExperimentRecorder:
             
             # Save loss curve to separate file if it exists
             if loss_curve:
-                self._save_loss_curve(individual.id, generation, loss_curve)
-                # Store reference to loss curve file in artifacts
-                loss_curve_filename = f"loss_curve_ind{individual.id}_gen{generation}.json"
+                saved_path = self._save_loss_curve(individual.id, generation, loss_curve)
                 entry.setdefault("artifacts", {})
-                entry["artifacts"]["loss_curve"] = loss_curve_filename
+                entry["artifacts"]["loss_curve"] = self._relative_path(saved_path)
 
         if hasattr(individual, "evaluation_error"):
             evaluation_record["error"] = individual.evaluation_error
@@ -205,10 +203,12 @@ class ExperimentRecorder:
         except ValueError:
             return path
 
-    def _save_loss_curve(self, individual_id: int, generation: int, loss_curve: list) -> None:
-        """Save loss curve data to a separate JSON file."""
+    def _save_loss_curve(self, individual_id: int, generation: int, loss_curve: list) -> str:
+        """Save loss curve data to a separate JSON file under a subfolder."""
         filename = f"loss_curve_ind{individual_id}_gen{generation}.json"
-        filepath = os.path.join(self.experiment_path, filename)
+        curves_dir = os.path.join(self.experiment_path, "loss_curves")
+        os.makedirs(curves_dir, exist_ok=True)
+        filepath = os.path.join(curves_dir, filename)
         temp_filepath = filepath + ".tmp"
         
         loss_curve_data = {
@@ -221,6 +221,7 @@ class ExperimentRecorder:
         with open(temp_filepath, "w", encoding="utf-8") as f:
             json.dump(loss_curve_data, f, indent=2, sort_keys=False)
         os.replace(temp_filepath, filepath)
+        return filepath
 
     def _save(self) -> None:
         temp_path = self.record_path + ".tmp"
