@@ -10,5 +10,6 @@ input.txt
 *.parquet
 tokenizer.json
 experiments/
+*_old/
 *.ipynb
 default_experiment_path/
