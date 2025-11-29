@@ -81,8 +81,10 @@ class Evolution:
                 try:
                     if random.random() < self.crossover_instead_of_mutation_rate:
                         strategy = "crossover"
+                        logging.info(f"Crossover between {parent1.id} and {parent2.id}")
                         child, operations = self._crossover(child, parent2)
                     else:
+                        logging.info(f"Mutating {parent1.id}")
                         child, operations = self._mutate(child)
                     successful_child = True
                 except Exception as e:
@@ -156,7 +158,6 @@ class Evolution:
         Returns:
             Child
         """
-        logging.info(f"Crossover between {child.id} and {parent.id}")
         applied_operations: list[dict] = []
         for crossover_fn, probability in self.crossover_fns_and_probabilities:
             if random.random() < probability:
@@ -182,7 +183,6 @@ class Evolution:
         Returns:
             Mutated child individual
         """
-        logging.info(f"Mutating {child.id}")
         applied_operations: list[dict] = []
         for mutation_fn, probability in self.mutation_fns_and_probabilities:
             if random.random() < probability:
