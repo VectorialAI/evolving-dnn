@@ -29,7 +29,7 @@ def main():
     recorder.data = data
 
     recorder._render_lineage_svg()
-    print(f"Generated: {os.path.join(args.experiment_path, 'lineage-codex.svg')}")
+    print(f"Generated: {os.path.join(args.experiment_path, 'lineage.svg')}")
 
 
 if __name__ == "__main__":
