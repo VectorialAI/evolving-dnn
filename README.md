@@ -185,6 +185,21 @@ The system expects:
 - **Fitness logs**: Generation-by-generation performance tracking
 - **Graph visualizations**: SVG exports of network architectures (if enabled)
 - **Population history**: Complete evolution trace
+- **Lineage graph**: `lineage.svg` showing evolutionary relationships
+
+### Understanding the Lineage Graph
+
+The lineage graph (`lineage.svg`) visualizes the evolutionary history of all individuals across generations:
+
+- **Nodes**: Each circle represents an individual, labeled with its ID
+- **Arrows**: Show parent-child relationships (arrow points from parent to child)
+  - **Blue arrows**: Primary parent — the individual that was cloned and then mutated/modified
+  - **Gray arrows**: Secondary parent — contributed genetic material via crossover
+- **Node colors**:
+  - **Blue nodes**: Individuals that survived to the final population
+  - **Gray nodes**: Dead ends — individuals with no descendants
+  - **White nodes**: Regular individuals that produced offspring
+- **Vertical position**: Rows represent generations (top = earliest, bottom = latest)
 
 ## Key Features
 

@@ -4,7 +4,7 @@ apt update && \
 apt install git software-properties-common graphviz screen rsync -y && \
 git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
 cd evolving-dnn/ && \
-git checkout main && \
+git checkout experiments && \
 chmod +x run_experiment.sh && \
 ./run_experiment.sh /workspace/experiments/experiment1
 
@@ -30,3 +30,6 @@ python3.11 -m venv .venv && \
 source .venv/bin/activate && \
 pip install -r requirements.txt && \
 screen -dmS experiment python -m src.gpt_evolution.run --experiment_path $1
+
+
+May need to run: `export HF_HUB_ENABLE_HF_TRANSFER=0` first
