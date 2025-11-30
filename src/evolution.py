@@ -71,8 +71,8 @@ class Evolution:
             # Create new population through crossover and mutation
             new_children = []
             while len(new_children) < self.num_children_per_generation:
-                parent1, parent2 = random.sample(self.population, 2)  # TODO should this sample with or without replacement?
-                child = self._copy_individual(parent1)
+                parents = random.sample(self.population, 2)  # TODO should this sample with or without replacement?
+                child = self._copy_individual(parents[0])
                 # Assign a new unique identifier immediately so downstream operations use the correct id
                 child.id = self.id_counter
                 self.id_counter += 1
@@ -81,10 +81,11 @@ class Evolution:
                 try:
                     if random.random() < self.crossover_instead_of_mutation_rate:
                         strategy = "crossover"
-                        logging.info(f"Crossover between {parent1.id} and {parent2.id}")
-                        child, operations = self._crossover(child, parent2)
+                        logging.info(f"Crossover between {parents[0].id} and {parents[1].id}")
+                        child, operations = self._crossover(child, parents[1])
                     else:
-                        logging.info(f"Mutating {parent1.id}")
+                        logging.info(f"Mutating {parents[0].id}")
+                        parents = [parents[0]]
                         child, operations = self._mutate(child)
                     successful_child = True
                 except Exception as e:
@@ -97,7 +98,7 @@ class Evolution:
                 self.experiment_recorder.record_child_creation(
                     individual_id=child.id,
                     generation=self.generation,
-                    parents=(parent1.id, parent2.id),
+                    parents=(parents[0].id, parents[1].id),
                     operations=operations,
                     strategy=strategy,
                 )

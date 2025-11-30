@@ -362,18 +362,9 @@ class ExperimentRecorder:
             operations = creation.get("operations") or []
             # Attach readable labels under the node itself
             node_operation_lines[child_id] = format_node_operation_lines(strategy, operations)
-            parent_ids = []
-            for parent in parents:
-                if parent is None:
-                    continue
-                try:
-                    parent_ids.append(int(parent))
-                except (TypeError, ValueError):
-                    continue
-            normalized_strategy = (strategy or "").lower()
-            expected_parent_count = 2 if normalized_strategy == "crossover" else 1
-            parent_ids = parent_ids[:expected_parent_count]
-            for idx, parent_id in enumerate(parent_ids):
+            if strategy == "mutation":  # NOTE: backwards compatibility for experiments 1-4 that had bug
+                parents = [parents[0]]
+            for idx, parent_id in enumerate(parents):
                 if parent_id not in node_positions:
                     continue
                 label = build_label(strategy, operations, idx, parent_id)
