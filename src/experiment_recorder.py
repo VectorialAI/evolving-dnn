@@ -2,7 +2,10 @@ import copy
 import json
 import math
 import os
+import random
+import textwrap
 from datetime import datetime, timezone
+from html import escape
 from typing import Any, Dict, Iterable, Optional
 
 
@@ -190,6 +193,7 @@ class ExperimentRecorder:
 
         duration_seconds = (end_time - self._start_time).total_seconds()
         self.data["run"]["duration_seconds"] = duration_seconds
+        self._render_lineage_svg()
         self._save()
 
     # ------------------------------------------------------------------ #
@@ -239,3 +243,203 @@ class ExperimentRecorder:
                 return value
             return None
         return value
+
+    def _render_lineage_svg(self) -> None:
+        """Render a lightweight lineage SVG for the entire run."""
+        individuals = self.data.get("individuals", {})
+        if not individuals:
+            return
+
+        generation_nodes: Dict[int, list[int]] = {}
+        for entry in individuals.values():
+            creation = entry.get("creation")
+            if not creation:
+                continue
+            generation = creation.get("generation")
+            if generation is None:
+                continue
+            try:
+                individual_id = int(entry["id"])
+            except (TypeError, ValueError):
+                continue
+            generation_nodes.setdefault(int(generation), []).append(individual_id)
+
+        if not generation_nodes:
+            return
+
+        generations = sorted(generation_nodes.keys())
+        max_nodes = max(len(nodes) for nodes in generation_nodes.values())
+        if max_nodes == 0:
+            return
+
+        margin_x, margin_y = 60, 60
+        x_gap, y_gap, node_radius = 120, 140, 22
+        svg_width = max(320, margin_x * 2 + (max_nodes - 1) * x_gap)
+        svg_height = margin_y * 2 + (len(generations) - 1) * y_gap
+
+        def _jitter(seed: int) -> float:
+            """Deterministic jitter value in [-0.5, 0.5] derived via random.Random."""
+            rng = random.Random(seed)
+            return rng.uniform(-0.5, 0.5)
+
+        node_positions: Dict[int, tuple[float, float]] = {}
+        for row, generation in enumerate(generations):
+            nodes = sorted(generation_nodes[generation])
+            span = (len(nodes) - 1) * x_gap if len(nodes) > 1 else 0
+            start_x = (svg_width - span) / 2
+            y_pos = margin_y + row * y_gap
+            for idx, node_id in enumerate(nodes):
+                x_pos = start_x + idx * x_gap
+                jitter = _jitter(node_id) * (x_gap * 0.35)
+                x_pos = max(margin_x, min(svg_width - margin_x, x_pos + jitter))
+                node_positions[node_id] = (x_pos, y_pos)
+
+        final_generation_ids: set[int] = set()
+        if self.data.get("generations"):
+            final_snapshot = self.data["generations"][-1].get("population_snapshot", [])
+            for snapshot in final_snapshot:
+                node_id = snapshot.get("id")
+                if node_id is not None:
+                    try:
+                        final_generation_ids.add(int(node_id))
+                    except (TypeError, ValueError):
+                        continue
+
+        def build_label(strategy: Optional[str], operations: Iterable[Dict[str, Any]], parent_idx: int, parent_id: int) -> str:
+            names: list[str] = []
+            for op in operations:
+                op_name = op.get("name") or op.get("type")
+                if not op_name:
+                    continue
+                op_parent = op.get("with_parent_id")
+                if op_parent is not None:
+                    try:
+                        if int(op_parent) == parent_id:
+                            names.append(str(op_name))
+                    except (TypeError, ValueError):
+                        continue
+                elif parent_idx == 0:
+                    names.append(str(op_name))
+            if not names and strategy:
+                names.append(strategy)
+            label = ", ".join(names) if names else "lineage"
+            return label if len(label) <= 48 else f"{label[:45]}..."
+
+        def format_node_operation_lines(strategy: Optional[str], operations: Iterable[Dict[str, Any]], max_chars: int = 24, max_lines: int = 2) -> list[str]:
+            names: list[str] = []
+            for op in operations:
+                op_name = op.get("name") or op.get("type")
+                if not op_name:
+                    continue
+                names.append(str(op_name))
+            if not names and strategy:
+                names = [strategy]
+            if not names:
+                return []
+            combined = ", ".join(names)
+            wrapped = textwrap.wrap(combined, width=max_chars)
+            if len(wrapped) > max_lines:
+                wrapped = wrapped[:max_lines]
+                if not wrapped[-1].endswith("..."):
+                    trimmed = wrapped[-1][:max(0, max_chars - 3)].rstrip(", ")
+                    wrapped[-1] = (trimmed if trimmed else "") + "..."
+            return wrapped
+
+        edges: list[tuple[int, int, str]] = []
+        node_operation_lines: Dict[int, list[str]] = {}
+        for entry in individuals.values():
+            creation = entry.get("creation")
+            if not creation:
+                continue
+            try:
+                child_id = int(entry["id"])
+            except (TypeError, ValueError):
+                continue
+            if child_id not in node_positions:
+                continue
+            parents = creation.get("parents") or []
+            strategy = creation.get("strategy")
+            operations = creation.get("operations") or []
+            # Attach readable labels under the node itself
+            node_operation_lines[child_id] = format_node_operation_lines(strategy, operations)
+            parent_ids = []
+            for parent in parents:
+                if parent is None:
+                    continue
+                try:
+                    parent_ids.append(int(parent))
+                except (TypeError, ValueError):
+                    continue
+            normalized_strategy = (strategy or "").lower()
+            expected_parent_count = 2 if normalized_strategy == "crossover" else 1
+            parent_ids = parent_ids[:expected_parent_count]
+            for idx, parent_id in enumerate(parent_ids):
+                if parent_id not in node_positions:
+                    continue
+                label = build_label(strategy, operations, idx, parent_id)
+                edges.append((parent_id, child_id, label or "lineage"))
+
+        if not node_positions:
+            return
+
+        svg_lines = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{int(svg_width)}" height="{int(svg_height)}" viewBox="0 0 {int(svg_width)} {int(svg_height)}" font-family="Arial, sans-serif">',
+            "  <defs>",
+            '    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#666">',
+            '      <polygon points="0 0, 10 3.5, 0 7" />',
+            "    </marker>",
+            "  </defs>",
+        ]
+
+        for parent_id, child_id, label in edges:
+            x1, y1 = node_positions[parent_id]
+            x2, y2 = node_positions[child_id]
+            # Shorten line to stop at circle edge so arrowhead is visible
+            dx, dy = x2 - x1, y2 - y1
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist > 0:
+                x2 -= (dx / dist) * node_radius
+                y2 -= (dy / dist) * node_radius
+            svg_lines.append(
+                f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#888" stroke-width="1" marker-end="url(#arrowhead)">'
+            )
+            svg_lines.append(f'    <title>{escape(label)}</title>')
+            svg_lines.append("  </line>")
+
+        for node_id, (x_pos, y_pos) in node_positions.items():
+            highlight = node_id in final_generation_ids
+            fill = "#4c8bf5" if highlight else "#f6f8fa"
+            stroke = "#2457d3" if highlight else "#9aa0a6"
+            text_color = "#fff" if highlight else "#202124"
+            svg_lines.append(
+                f'  <circle cx="{x_pos:.1f}" cy="{y_pos:.1f}" r="{node_radius}" fill="{fill}" stroke="{stroke}" stroke-width="1.5" />'
+            )
+            svg_lines.append(
+                f'  <text x="{x_pos:.1f}" y="{y_pos:.1f}" font-size="12" text-anchor="middle" dominant-baseline="middle" fill="{text_color}">{escape(str(node_id))}</text>'
+            )
+            operation_lines = node_operation_lines.get(node_id)
+            if operation_lines:
+                text_y = y_pos + node_radius + 12
+                svg_lines.append(
+                    f'  <text x="{x_pos:.1f}" y="{text_y:.1f}" font-size="10" text-anchor="middle" fill="#444">'
+                )
+                svg_lines.append(f'    <tspan x="{x_pos:.1f}" dy="0">{escape(operation_lines[0])}</tspan>')
+                for line in operation_lines[1:]:
+                    svg_lines.append(f'    <tspan x="{x_pos:.1f}" dy="12">{escape(line)}</tspan>')
+                svg_lines.append("  </text>")
+
+        for row, generation in enumerate(generations):
+            y_pos = margin_y + row * y_gap - node_radius - 12
+            if y_pos < 0:
+                y_pos = 12
+            svg_lines.append(
+                f'  <text x="{margin_x/2:.1f}" y="{y_pos:.1f}" font-size="11" fill="#555">Gen {generation}</text>'
+            )
+
+        svg_lines.append("</svg>")
+
+        svg_path = os.path.join(self.experiment_path, "lineage.svg")
+        with open(svg_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(svg_lines))
+
+        self.data["run"]["paths"]["lineage_graph"] = self._relative_path(svg_path)
