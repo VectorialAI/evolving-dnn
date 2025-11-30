@@ -345,7 +345,7 @@ class ExperimentRecorder:
                     wrapped[-1] = (trimmed if trimmed else "") + "..."
             return wrapped
 
-        edges: list[tuple[int, int, str]] = []
+        edges: list[tuple[int, int, str, int]] = []  # (parent_id, child_id, label, parent_idx)
         node_operation_lines: Dict[int, list[str]] = {}
         for entry in individuals.values():
             creation = entry.get("creation")
@@ -368,7 +368,7 @@ class ExperimentRecorder:
                 if parent_id not in node_positions:
                     continue
                 label = build_label(strategy, operations, idx, parent_id)
-                edges.append((parent_id, child_id, label or "lineage"))
+                edges.append((parent_id, child_id, label or "lineage", idx))
 
         if not node_positions:
             return
@@ -379,10 +379,13 @@ class ExperimentRecorder:
             '    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#666">',
             '      <polygon points="0 0, 10 3.5, 0 7" />',
             "    </marker>",
+            '    <marker id="arrowhead-primary" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto" fill="#4c8bf5">',
+            '      <polygon points="0 0, 10 3.5, 0 7" />',
+            "    </marker>",
             "  </defs>",
         ]
 
-        for parent_id, child_id, label in edges:
+        for parent_id, child_id, label, parent_idx in edges:
             x1, y1 = node_positions[parent_id]
             x2, y2 = node_positions[child_id]
             # Shorten line to stop at circle edge so arrowhead is visible
@@ -391,13 +394,18 @@ class ExperimentRecorder:
             if dist > 0:
                 x2 -= (dx / dist) * node_radius
                 y2 -= (dy / dist) * node_radius
+            # First parent (primary) gets blue arrow, others get gray
+            if parent_idx == 0:
+                stroke_color, marker_id = "#4c8bf5", "arrowhead-primary"
+            else:
+                stroke_color, marker_id = "#888", "arrowhead"
             svg_lines.append(
-                f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#888" stroke-width="1" marker-end="url(#arrowhead)">'
+                f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke_color}" stroke-width="1" marker-end="url(#{marker_id})">'
             )
             svg_lines.append(f'    <title>{escape(label)}</title>')
             svg_lines.append("  </line>")
 
-        nodes_with_children = {parent_id for parent_id, _, _ in edges}
+        nodes_with_children = {parent_id for parent_id, _, _, _ in edges}
         for node_id, (x_pos, y_pos) in node_positions.items():
             highlight = node_id in final_generation_ids
             has_children = node_id in nodes_with_children
