@@ -273,7 +273,7 @@ class ExperimentRecorder:
             return
 
         margin_x, margin_y = 60, 60
-        x_gap, y_gap, node_radius = 120, 140, 22
+        x_gap, y_gap, node_radius = 220, 140, 22
         svg_width = max(320, margin_x * 2 + (max_nodes - 1) * x_gap)
         svg_height = margin_y * 2 + (len(generations) - 1) * y_gap
 
