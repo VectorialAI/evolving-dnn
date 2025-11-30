@@ -397,11 +397,16 @@ class ExperimentRecorder:
             svg_lines.append(f'    <title>{escape(label)}</title>')
             svg_lines.append("  </line>")
 
+        nodes_with_children = {parent_id for parent_id, _, _ in edges}
         for node_id, (x_pos, y_pos) in node_positions.items():
             highlight = node_id in final_generation_ids
-            fill = "#4c8bf5" if highlight else "#f6f8fa"
-            stroke = "#2457d3" if highlight else "#9aa0a6"
-            text_color = "#fff" if highlight else "#202124"
+            has_children = node_id in nodes_with_children
+            if highlight:
+                fill, stroke, text_color = "#4c8bf5", "#2457d3", "#fff"
+            elif not has_children:
+                fill, stroke, text_color = "#e0e0e0", "#aaa", "#666"
+            else:
+                fill, stroke, text_color = "#f6f8fa", "#9aa0a6", "#202124"
             svg_lines.append(
                 f'  <circle cx="{x_pos:.1f}" cy="{y_pos:.1f}" r="{node_radius}" fill="{fill}" stroke="{stroke}" stroke-width="1.5" />'
             )
