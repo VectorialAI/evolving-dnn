@@ -82,6 +82,7 @@ def mutation_add_skip_connection(individual, **kwargs):
     later_nodes = [n for n in eligible_nodes if n != first_node and 
                     list(individual.graph_module.graph.nodes).index(n) > 
                     list(individual.graph_module.graph.nodes).index(first_node)]
+    # TODO let's make this a real for loop, and break out when you ever hit a mask node
     
     if not later_nodes:
         logging.warning("No eligible later nodes for skip connection")
@@ -135,7 +136,7 @@ def mutation_add_branch(individual, **kwargs):
     return individual
 
 
-def mutation_remove_node(individual, unremovable_node_targets=None, **kwargs):
+def mutation_remove_node(individual, unremovable_node_targets=None, **kwargs):  # TODO add src.mingpt_altered.model._masked_fill_softmax to unremovable_node_targets
     unremovable_node_targets = unremovable_node_targets or []
     # Find eligible nodes to remove (not input, output, or critical nodes)
     nodes = list(individual.graph_module.graph.nodes)
