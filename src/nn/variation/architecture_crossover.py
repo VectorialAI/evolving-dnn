@@ -284,7 +284,7 @@ def _select_random_mapping(
         for i, arg_or_user in enumerate(args_or_users):  # TODO if these are users (meaning output_mapping), we don't necessarily need the same number of users in the target graph... But we are forcing it to be the same here.
             if arg_or_user is not None:
                 continue
-            candidates = [c for c in candidates_dict.get(node, []) if c not in used_candidates and c not in visited_nodes_set]  # TODO let's make this a real for loop, and break out when you ever hit a mask node
+            candidates = [c for c in candidates_dict.get(node, []) if c not in used_candidates and c not in visited_nodes_set]  # TODO let's make this a real for loop, and break out when you ever hit a node of our _self_attention_transposes wrapper
             if candidates:
                 selected = random.choice(candidates)
                 used_candidates.add(selected)
