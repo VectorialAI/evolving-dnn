@@ -8,7 +8,7 @@ import torch
 from torch.fx.passes.shape_prop import ShapeProp
 
 from ..individual import NeuralNetworkIndividual
-from ..variation.utils import get_unique_name, node_has_shape
+from ..variation.utils import get_unique_name, node_has_shape, get_feature_dims
 from ..visualization import visualize_graph
 from ..variation.architecture_adaptation import adapt_node_shape
 
@@ -20,7 +20,7 @@ CROSSOVER_VISUALIZATION_DIR = "crossover_visualization"
 
 # TODO need to prune after to save computation
 
-def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndividual, **kwargs):
+def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndividual, safe_dims: int, **kwargs):
     crossover_visualization_dir = os.path.join(kwargs.get("experiment_path", ""), CROSSOVER_VISUALIZATION_DIR)
     os.makedirs(crossover_visualization_dir, exist_ok=True)
 
@@ -60,7 +60,7 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
                 continue
             
             # Try to find connections
-            input_mapping, topo_target_input_nodes, output_mapping = find_subgraph_connections(child.graph_module.graph, input_boundary_nodes, output_boundary_nodes)
+            input_mapping, topo_target_input_nodes, output_mapping = find_subgraph_connections(child.graph_module.graph, input_boundary_nodes, output_boundary_nodes, safe_dims)
             
             lowest_num_boundary_nodes = num_boundary_nodes
             logging.debug(f"Attempt {attempt + 1}: ACCEPTED - new best subgraph with {num_boundary_nodes} boundary nodes")
@@ -85,7 +85,7 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
         random_int = random.randint(0, 1000000)
         visualize_graph(parent.graph_module, "model_graph_highlighted", os.path.join(crossover_visualization_dir, f"{random_int}_{parent.id}_graph_highlighted.svg"), highlight_nodes=subgraph_node_names)
 
-    child.graph_module, new_node_names = insert_subgraph(child.graph_module, **insert_subgraph_kwargs)
+    child.graph_module, new_node_names = insert_subgraph(child.graph_module, safe_dims, **insert_subgraph_kwargs)
 
     # Log successful subgraph insertion
     logging.info(f"Successfully inserted subgraph with {len(insert_subgraph_kwargs['subgraph_nodes'])} nodes into child {child.id} from parent {parent.id}")
@@ -202,7 +202,8 @@ def _has_float_dtype(node: torch.fx.Node):
 def find_subgraph_connections(
     target_graph: torch.fx.Graph,
     input_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]],
-    output_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]]
+    output_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]],
+    safe_dims: int
 ):
     """
     Finds compatible connection points between a subgraph and a target graph.
@@ -211,7 +212,7 @@ def find_subgraph_connections(
         target_graph: The graph to insert the subgraph into
         input_mapping: Dict mapping subgraph input boundary node -> target graph args. A None arg implies we need to select a compatible target arg.
         output_mapping: Dict mapping subgraph output boundary node -> target graph users. A None user implies we need to select a compatible target user.
-    
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
     Returns:
         A tuple of (input_mapping, topo_target_input_nodes, output_mapping)
         input_mapping: Dict mapping subgraph input boundary node -> list of args in either the target graph or the subgraph.
@@ -233,7 +234,8 @@ def find_subgraph_connections(
             return False
 
         # Ensure batch dimension matches
-        if node1.meta["tensor_meta"].shape[0] != node2.meta["tensor_meta"].shape[0]:
+        # TODO: Find out when would this fail?
+        if get_feature_dims(node1.meta["tensor_meta"].shape, safe_dims=safe_dims) != get_feature_dims(node2.meta["tensor_meta"].shape, safe_dims=safe_dims):
             return False
             
         return True
@@ -255,7 +257,7 @@ def find_subgraph_connections(
         output_mapping,
         get_candidates(output_mapping),
         target_graph,
-       target_input_nodes
+        target_input_nodes,
     )
     return input_mapping, topo_target_input_nodes, output_mapping
 
@@ -314,6 +316,7 @@ def insert_subgraph(
     input_mapping: dict[torch.fx.Node, list[torch.fx.Node|list[torch.fx.Node]]],
     topo_target_input_nodes: list[torch.fx.Node],  # TODO ideally we can just sort the input_mapping to be topographical instead of needing this list
     output_mapping: dict[torch.fx.Node, list[torch.fx.Node|list[torch.fx.Node]]],
+    safe_dims: int
 ):
     """
     Inserts a subgraph into the target graph.
@@ -323,6 +326,7 @@ def insert_subgraph(
         input_mapping: Dict mapping subgraph input boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
         topo_target_input_nodes: List of target nodes for the input boundary nodes, in topological order.
         output_mapping: Dict mapping subgraph output boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
     Returns:
         Modified target_graph.
     """
@@ -373,8 +377,8 @@ def insert_subgraph(
                 target_graph_module, _ = adapt_node_shape(
                     target_graph_module,
                     node=target_input,
-                    current_size=target_input.meta["tensor_meta"].shape[1:],
-                    target_size=node.args[j].meta["tensor_meta"].shape[1:],
+                    current_size=get_feature_dims(target_input.meta["tensor_meta"].shape, safe_dims=safe_dims),
+                    target_size=get_feature_dims(node.args[j].meta["tensor_meta"].shape, safe_dims=safe_dims),
                     target_user=new_node
                 )
         else:
@@ -421,8 +425,8 @@ def insert_subgraph(
             target_graph_module, _ = adapt_node_shape(
                 target_graph_module,
                 node=new_out_node,
-                current_size=sub_out.meta["tensor_meta"].shape[1:],
-                target_size=first_arg_shape[1:],
+                current_size=get_feature_dims(sub_out.meta["tensor_meta"].shape, safe_dims=safe_dims),
+                target_size=get_feature_dims(first_arg_shape, safe_dims=safe_dims),
                 target_user=user
             )
 
