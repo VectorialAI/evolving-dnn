@@ -116,7 +116,7 @@ def _self_attention_transposes(
     att = _masked_fill_softmax(att, bias[:,:,:sequence_length,:sequence_length] == 0, float('-inf'), dim=-1)
     att = attn_dropout(att)
     y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-    y = _transpose_contiguous(y, 1, 2).view(batch_size, sequence_length, embedding_dim) # re-assemble all head outputs side by side
+    return _transpose_contiguous(y, 1, 2).view(batch_size, sequence_length, embedding_dim) # re-assemble all head outputs side by side
     # y = y.transpose(1, 2).contiguous().view(batch_size, sequence_length, embedding_dim)
 
 class Block(nn.Module):
