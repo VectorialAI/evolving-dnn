@@ -15,7 +15,7 @@ from ..variation.utils import (
 from ..variation.architecture_adaptation import adapt_node_shape
 
 
-def mutation_add_linear(individual, safe_dims: int = 1, **kwargs):
+def mutation_add_linear(individual, safe_dims: int, **kwargs):
     existing_param_count = individual.param_count
     # Find a random node in the graph to add a linear layer after
     eligible_nodes = _get_eligible_nodes(individual)
@@ -55,7 +55,7 @@ def mutation_add_linear(individual, safe_dims: int = 1, **kwargs):
     return individual
 
 
-def mutation_add_relu(individual, safe_dims: int = 1, **kwargs):
+def mutation_add_relu(individual, safe_dims: int, **kwargs):
     # Find a random node in the graph to add a ReLU layer after
     eligible_nodes = _get_eligible_nodes(individual)
     if not eligible_nodes:
@@ -70,7 +70,7 @@ def mutation_add_relu(individual, safe_dims: int = 1, **kwargs):
     return individual
 
 
-def mutation_add_skip_connection(individual, safe_dims: int = 1, **kwargs):
+def mutation_add_skip_connection(individual, safe_dims: int, **kwargs):
     # Find two random nodes in the graph to connect
     eligible_nodes = _get_eligible_nodes(individual)
     
@@ -98,7 +98,7 @@ def mutation_add_skip_connection(individual, safe_dims: int = 1, **kwargs):
     return individual
 
 
-def mutation_add_branch(individual, safe_dims: int = 1, **kwargs):
+def mutation_add_branch(individual, safe_dims: int, **kwargs):
     # Find a random node in the graph to add branches after
     eligible_nodes = _get_eligible_nodes(individual)
     
@@ -138,7 +138,7 @@ def mutation_add_branch(individual, safe_dims: int = 1, **kwargs):
     return individual
 
 
-def mutation_remove_node(individual, unremovable_node_targets=None, safe_dims: int = 1, **kwargs):  # TODO add src.mingpt_altered.model._self_attention_transposes to unremovable_node_targets
+def mutation_remove_node(individual, safe_dims: int, unremovable_node_targets=None, **kwargs):  # TODO add src.mingpt_altered.model._self_attention_transposes to unremovable_node_targets
     unremovable_node_targets = unremovable_node_targets or []
     # Find eligible nodes to remove (not input, output, or critical nodes)
     nodes = list(individual.graph_module.graph.nodes)
@@ -173,7 +173,7 @@ def _get_eligible_nodes(individual, nodes=None):
         eligible_nodes.append(node)
     return eligible_nodes
 
-def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, operation: str, safe_dims: int = 1, **kwargs):
+def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, operation: str, safe_dims: int, **kwargs):
     """
     Adds a new node to the graph after the reference node.
     
@@ -374,7 +374,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
 
     return graph
 
-def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, safe_dims: int = 1):
+def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, safe_dims: int):
     """
     Removes a node from the graph, can't be a skip connection
     
