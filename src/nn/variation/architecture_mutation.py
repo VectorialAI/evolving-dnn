@@ -15,7 +15,7 @@ from ..variation.utils import (
 from ..variation.architecture_adaptation import adapt_node_shape
 
 
-def mutation_add_linear(individual, **kwargs):
+def mutation_add_linear(individual, safe_dims: int = 1, **kwargs):
     existing_param_count = individual.param_count
     # Find a random node in the graph to add a linear layer after
     eligible_nodes = _get_eligible_nodes(individual)
@@ -45,8 +45,9 @@ def mutation_add_linear(individual, **kwargs):
     
     # Add a linear layer
     individual.graph_module = _add_node(individual.graph_module, reference_node, 'linear', 
-                                        input_size=input_size, output_size=output_size)
+                                        input_size=input_size, output_size=output_size, safe_dims=safe_dims)
     # Adjust training config (you could add learning rate mutation here)
+    # TODO: Determine if this is supposed to be here of in the hyperparam_variation.py file
     if random.random() < 0.3:
         individual.train_config.learning_rate *= random.uniform(0.5, 1.5)
         individual.train_config.learning_rate = max(0.0001, min(0.1, individual.train_config.learning_rate))
@@ -54,7 +55,7 @@ def mutation_add_linear(individual, **kwargs):
     return individual
 
 
-def mutation_add_relu(individual, **kwargs):
+def mutation_add_relu(individual, safe_dims: int = 1, **kwargs):
     # Find a random node in the graph to add a ReLU layer after
     eligible_nodes = _get_eligible_nodes(individual)
     if not eligible_nodes:
@@ -65,11 +66,11 @@ def mutation_add_relu(individual, **kwargs):
     logging.debug(f"Adding ReLU after {reference_node.name}")
     
     # Add a ReLU layer
-    individual.graph_module = _add_node(individual.graph_module, reference_node, 'relu')
+    individual.graph_module = _add_node(individual.graph_module, reference_node, 'relu', safe_dims=safe_dims)
     return individual
 
 
-def mutation_add_skip_connection(individual, **kwargs):
+def mutation_add_skip_connection(individual, safe_dims: int = 1, **kwargs):
     # Find two random nodes in the graph to connect
     eligible_nodes = _get_eligible_nodes(individual)
     
@@ -92,12 +93,12 @@ def mutation_add_skip_connection(individual, **kwargs):
     logging.debug(f"Adding skip connection from {first_node.name} to {second_node.name}")
     
     # Add skip connection
-    individual.graph_module = _add_node(individual.graph_module, second_node, 'skip', first_node=first_node)
+    individual.graph_module = _add_node(individual.graph_module, second_node, 'skip', first_node=first_node, safe_dims=safe_dims)
     
     return individual
 
 
-def mutation_add_branch(individual, **kwargs):
+def mutation_add_branch(individual, safe_dims: int = 1, **kwargs):
     # Find a random node in the graph to add branches after
     eligible_nodes = _get_eligible_nodes(individual)
     
@@ -131,12 +132,13 @@ def mutation_add_branch(individual, **kwargs):
         reference_node=reference_node,
         operation='branch',
         branch1_out_size=branch1_out_size,
-        branch2_out_size=branch2_out_size)
+        branch2_out_size=branch2_out_size,
+        safe_dims=safe_dims)
     
     return individual
 
 
-def mutation_remove_node(individual, unremovable_node_targets=None, **kwargs):  # TODO add src.mingpt_altered.model._self_attention_transposes to unremovable_node_targets
+def mutation_remove_node(individual, unremovable_node_targets=None, safe_dims: int = 1, **kwargs):  # TODO add src.mingpt_altered.model._self_attention_transposes to unremovable_node_targets
     unremovable_node_targets = unremovable_node_targets or []
     # Find eligible nodes to remove (not input, output, or critical nodes)
     nodes = list(individual.graph_module.graph.nodes)
@@ -153,7 +155,7 @@ def mutation_remove_node(individual, unremovable_node_targets=None, **kwargs):  
     logging.debug(f"Removing node: {node_to_remove.name}")
     
     # Remove the node
-    individual.graph_module, remaining_node = _remove_node(individual.graph_module, node_to_remove)
+    individual.graph_module, remaining_node = _remove_node(individual.graph_module, node_to_remove, safe_dims=safe_dims)
     logging.debug(f"Successfully removed node {node_to_remove.name}, remaining node: {remaining_node.name}")
     return individual
 
@@ -171,7 +173,7 @@ def _get_eligible_nodes(individual, nodes=None):
         eligible_nodes.append(node)
     return eligible_nodes
 
-def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, operation: str, **kwargs):
+def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, operation: str, safe_dims: int = 1, **kwargs):
     """
     Adds a new node to the graph after the reference node.
     
@@ -179,6 +181,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         graph: The FX graph
         reference_node: The node after which the new node will be inserted
         operation: The operation to be performed by the new node ('linear', 'pool', 'repeat', etc.)
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
         **kwargs: Additional arguments for specific operations
             - For 'pool': target_size
             - For 'repeat': target_size
@@ -188,7 +191,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
     """
   
     # Get feature dimensions from reference node (excluding batch)
-    ref_feature_shape = get_feature_dims(reference_node.meta['tensor_meta'].shape)
+    ref_feature_shape = get_feature_dims(reference_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
     
     # Add a linear layer to the graph
     if operation == 'linear':
@@ -251,9 +254,9 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         else:
             new_node_output_shape = tuple(list(ref_feature_shape[:-1]) + [target_size])
 
-    # Add a flatten layer, that flattens every dimension except the batch dimension 
+    # Add a flatten layer, that flattens every dimension except the safe_dims dimensions 
     elif operation == 'flatten':
-        graph, new_node = add_specific_node(graph, reference_node, nn.Flatten(start_dim=1, end_dim=-1))
+        graph, new_node = add_specific_node(graph, reference_node, nn.Flatten(start_dim=safe_dims, end_dim=-1))
         
         # Calculate flattened feature size (product of all feature dimensions)
         flattened_size = math.prod(ref_feature_shape)
@@ -271,8 +274,8 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         graph, new_node = add_skip_connection(graph, second_node, first_node)
         
         # Get the feature shapes of both nodes
-        first_features = get_feature_dims(first_node.meta['tensor_meta'].shape)
-        second_features = get_feature_dims(second_node.meta['tensor_meta'].shape)
+        first_features = get_feature_dims(first_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
+        second_features = get_feature_dims(second_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
         
         # For a skip connection, we'll use the second node's features for input and output
         new_node_input_shape = second_features
@@ -307,7 +310,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         # Adapt branch nodes if needed to ensure they have compatible shapes
         if branch1_shape != branch2_shape:    
             # Adapt first branch
-            graph, adapted_branch1_node = adapt_node_shape(graph, branch1_node, branch1_shape, branch2_shape, target_user=new_node)
+            graph, adapted_branch1_node = adapt_node_shape(graph, branch1_node, branch1_shape, branch2_shape, safe_dims=safe_dims, target_user=new_node)
             # Update the skip connection node's args to use the adapted node
             new_node.args = (adapted_branch1_node, branch2_node)
             
@@ -321,7 +324,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         branch2_node.args = (reference_node,)
 
         # Get feature dimensions from skip connection output shape
-        new_node_output_shape = get_feature_dims(new_node.meta['tensor_meta'].shape)
+        new_node_output_shape = get_feature_dims(new_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
         
         # For branches, input shape is reference node features, output is from skip connection
         new_node_input_shape = ref_feature_shape
@@ -353,9 +356,10 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
     # Fix the connections with clear input/output shape distinction
     _adapt_connections(graph, new_node, 
                      parent_output_shape=reference_node.meta['tensor_meta'].shape,  # Use reference node's output shape as parent output
-                     new_node_input_features=new_node_input_shape,
-                     new_node_output_features=new_node_output_shape,
-                     child_input_shape=reference_node.meta['tensor_meta'].shape)
+                     new_node_input_features=new_node_input_shape, # excluding safe_dims dimensions
+                     new_node_output_features=new_node_output_shape, # excluding safe_dims dimensions
+                     child_input_shape=reference_node.meta['tensor_meta'].shape,
+                     safe_dims=safe_dims)
 
     graph.graph.lint()
     graph.recompile()
@@ -370,7 +374,7 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
 
     return graph
 
-def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node):
+def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.fx.Node, safe_dims: int = 1):
     """
     Removes a node from the graph, can't be a skip connection
     
@@ -381,7 +385,7 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
         graph: The modified graph
     """
     # Get shapes before removing node
-    removed_output_shape = reference_node.meta['tensor_meta'].shape  # SHAPE NOTE: Full shape with batch dimension
+    removed_output_shape = reference_node.meta['tensor_meta'].shape  # SHAPE NOTE: Full shape with safe_dims dimensions
     for feeding_node in reference_node.args:
         if hasattr(feeding_node, 'meta') and 'tensor_meta' in feeding_node.meta and hasattr(feeding_node.meta['tensor_meta'], 'shape'):
             feeding_output_shape = feeding_node.meta['tensor_meta'].shape
@@ -391,7 +395,7 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
             break
     
     # Extract feature dimensions
-    feeding_output_features = feeding_output_shape[1:]
+    feeding_output_features = get_feature_dims(feeding_output_shape, safe_dims=safe_dims)
     
     # Step 1: Create list of child node names before removal
     original_child_names = []
@@ -431,7 +435,8 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
                              parent_output_shape=feeding_output_shape,
                              new_node_input_features=feeding_output_features,
                              new_node_output_features=feeding_output_features,
-                             child_input_shape=child_input_shape)
+                             child_input_shape=child_input_shape,
+                             safe_dims=safe_dims)
 
     # Lint and recompile the graph
     graph.graph.lint()
@@ -446,9 +451,10 @@ def _adapt_connections(
     graph: torch.fx.GraphModule,
     new_node: torch.fx.Node,
     parent_output_shape: tuple,  # Full shape with batch dimension from parent node output
-    new_node_input_features: tuple,  # Feature dimensions only (no batch) for new node input
-    new_node_output_features: tuple,  # Feature dimensions only (no batch) for new node output
-    child_input_shape: tuple | list[tuple]  # Full shape with batch dimension required by child node, can be a list of shapes for multiple children
+    new_node_input_features: tuple,  # Feature dimensions only (excluding safe_dims dimensions) for new node input
+    new_node_output_features: tuple,  # Feature dimensions only (excluding safe_dims dimensions) for new node output
+    child_input_shape: tuple | list[tuple],  # Full shape with batch dimension required by child node, can be a list of shapes for multiple children
+    safe_dims: int
 ):
     """
     Adapts the connections to/from a node to ensure all connected nodes have compatible shapes.
@@ -457,17 +463,18 @@ def _adapt_connections(
         graph: The FX graph
         new_node: The node whose connections need adaptation
         parent_output_shape: The shape output by the parent node (full shape with batch dimension)
-        new_node_input_features: The input shape expected by new node (feature dimensions only, no batch)
-        new_node_output_features: The output shape produced by new node (feature dimensions only, no batch)
+        new_node_input_features: The input shape expected by new node (feature dimensions only, excluding safe_dims dimensions)
+        new_node_output_features: The output shape produced by new node (feature dimensions only, excluding safe_dims dimensions)
         child_input_shape: The input shape expected by the child node (full shape with batch dimension), can be a list of shapes for multiple children
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
     Returns:
         graph: The modified graph
     """
     
     # Extract feature dimensions from parent and child shapes
-    parent_features = get_feature_dims(parent_output_shape)
+    parent_features = get_feature_dims(parent_output_shape, safe_dims=safe_dims)
     if not isinstance(child_input_shape, list):
-        child_features = get_feature_dims(child_input_shape)
+        child_features = get_feature_dims(child_input_shape, safe_dims=safe_dims)
 
     # Special handling for skip connections (torch.add operations)
     # TODO: Handle any kind of skip connection (e.g. torch.cat, torch.mul, etc.)
@@ -479,8 +486,8 @@ def _adapt_connections(
         second_shape = second_node.meta['tensor_meta'].shape
         
         # Extract feature dimensions
-        first_features = get_feature_dims(first_shape)
-        second_features = get_feature_dims(second_shape)
+        first_features = get_feature_dims(first_shape, safe_dims=safe_dims)
+        second_features = get_feature_dims(second_shape, safe_dims=safe_dims)
         
         # Check if feature dimensions are compatible
         if first_features != second_features:
@@ -488,7 +495,7 @@ def _adapt_connections(
             logging.debug(f"Skip connection shapes don't match: {first_features} vs {second_features}")
             
             # Use target_user=new_node to only update the skip connection's use of first_node
-            graph, adapted_first_node = adapt_node_shape(graph, first_node, first_features, second_features, target_user=new_node)
+            graph, adapted_first_node = adapt_node_shape(graph, first_node, first_features, second_features, safe_dims=safe_dims, target_user=new_node)
             
             # Update the skip connection node's args
             new_node.args = (second_node, adapted_first_node)
@@ -498,8 +505,7 @@ def _adapt_connections(
         # Always adapt all dimensions for full compatibility
         if parent_features != new_node_input_features:
             logging.debug(f"Parent output features {parent_features} don't match node input features {new_node_input_features}")
-            # Parent output features (128, 239) don't match node input features (2, 128, 239)
-            graph, parent_node = adapt_node_shape(graph, new_node.args[0], parent_features, new_node_input_features)
+            graph, parent_node = adapt_node_shape(graph, new_node.args[0], parent_features, new_node_input_features, safe_dims=safe_dims)
 
     # Handle new-node-to-child connection(s)
     if isinstance(child_input_shape, list):
@@ -515,14 +521,14 @@ def _adapt_connections(
             # Get the corresponding child user for targeted adaptation
             target_child = child_users[i] if i < len(child_users) else None
             
-            child_features = get_feature_dims(child_shape)
+            child_features = get_feature_dims(child_shape, safe_dims=safe_dims)
             if new_node_output_features != child_features:
                 logging.debug(f"Node output features {new_node_output_features} don't match child {i} input features {child_features}")
-                graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, target_user=target_child)
+                graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, safe_dims=safe_dims, target_user=target_child)
     else:
         # Handle single child (original behavior)
         if new_node_output_features != child_features:
             logging.debug(f"Node output features {new_node_output_features} don't match child input features {child_features}")
-            graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features)
+            graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, safe_dims=safe_dims)
     
     return graph
