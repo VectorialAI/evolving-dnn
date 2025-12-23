@@ -49,6 +49,10 @@ class Evolution:
         self.experiment_recorder = experiment_recorder
 
         self.kwargs = kwargs
+        # Check if safe_dims in kwargs
+        # Must be in kwargs to pass to generic function calls
+        if 'safe_dims' not in self.kwargs:
+            raise ValueError("safe_dim must be provided in kwargs for Evolution.")
         self.kwargs['visualize_graphs'] = visualize_graphs  # Add visualize_graphs to kwargs so it gets passed to crossover/mutation functions
 
     def run_evolution(self, num_generations: int):
