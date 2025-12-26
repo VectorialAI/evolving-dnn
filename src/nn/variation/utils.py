@@ -8,6 +8,13 @@ from torch.fx.passes.shape_prop import ShapeProp
 from ..individual_graph_module import NeuralNetworkIndividualGraphModule
 
 
+# FX node ops we should never treat as eligible mutation/crossover targets.
+# - placeholder: graph inputs
+# - output: graph output
+# - get_attr: parameters/buffers/constants (e.g., attention masks like `bias`)
+EXCLUDED_NODE_OPS = ["placeholder", "output", "get_attr"]
+
+
 def get_unique_name(graph, base_name: str) -> str:
     """
     Generates a unique name for a node in the graph by appending incrementing numbers.

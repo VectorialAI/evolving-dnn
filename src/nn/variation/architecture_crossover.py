@@ -8,7 +8,7 @@ import torch
 from torch.fx.passes.shape_prop import ShapeProp
 
 from ..individual import NeuralNetworkIndividual
-from ..variation.utils import get_unique_name, node_has_shape, get_feature_dims
+from ..variation.utils import EXCLUDED_NODE_OPS, get_unique_name, node_has_shape, get_feature_dims
 from ..visualization import visualize_graph
 from ..variation.architecture_adaptation import adapt_node_shape
 
@@ -184,7 +184,7 @@ def random_subgraph(graph_module: torch.fx.GraphModule, num_nodes: int):
 
 def _is_allowed_subgraph_node_type(node: torch.fx.Node):
     # Reject placeholders / outputs
-    if node.op in ("placeholder", "output"):
+    if node.op in EXCLUDED_NODE_OPS:
         return False
 
     # Reject training-specific helper nodes
@@ -231,7 +231,7 @@ def find_subgraph_connections(
     
     def are_nodes_compatible(node1, node2):
         # Skip placeholder and output nodes
-        if node1.op in ["placeholder", "output"] or node2.op in ["placeholder", "output"]:
+        if node1.op in EXCLUDED_NODE_OPS or node2.op in EXCLUDED_NODE_OPS:
             return False
             
         # Check tensor metadata

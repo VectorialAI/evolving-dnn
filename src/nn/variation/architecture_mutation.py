@@ -9,8 +9,14 @@ from torch.fx.passes.shape_prop import ShapeProp
 
 from ..individual_graph_module import NeuralNetworkIndividualGraphModule
 from ..variation.utils import (
-    node_has_shape, add_specific_node, add_skip_connection, 
-    get_feature_dims, node_has_float_dtype, print_graph_debug_info, add_branch_nodes
+    EXCLUDED_NODE_OPS,
+    add_branch_nodes,
+    add_skip_connection,
+    add_specific_node,
+    get_feature_dims,
+    node_has_float_dtype,
+    node_has_shape,
+    print_graph_debug_info,
 )
 from ..variation.architecture_adaptation import adapt_node_shape
 
@@ -167,7 +173,7 @@ def _get_eligible_nodes(individual, nodes=None):
         nodes = list(individual.graph_module.graph.nodes)
     eligible_nodes = []
     for node in nodes:
-        if node.op in ['placeholder', 'output'] or not node_has_shape(node) or not node_has_float_dtype(node):
+        if node.op in EXCLUDED_NODE_OPS or not node_has_shape(node) or not node_has_float_dtype(node):
             continue
         
         eligible_nodes.append(node)
