@@ -320,23 +320,23 @@ def _traverse_and_extract_target_inputs(target_graph: torch.fx.Graph, target_inp
 
 def insert_subgraph(
     target_graph_module: torch.fx.GraphModule,
+    safe_dims: int,
     subgraph_nodes: set[torch.fx.Node],
     input_mapping: dict[torch.fx.Node, list[torch.fx.Node|list[torch.fx.Node]]],
     topo_target_input_nodes: list[torch.fx.Node],  # TODO ideally we can just sort the input_mapping to be topographical instead of needing this list
     output_mapping: dict[torch.fx.Node, list[torch.fx.Node|list[torch.fx.Node]]],
-    safe_dims: int
 ):
     """
     Inserts a subgraph into the target graph.
     Args:
-        target_graph: The FX graph to insert into.
+        target_graph_module: The FX graph module to insert into.
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
         subgraph_nodes: Set of nodes in the subgraph.
         input_mapping: Dict mapping subgraph input boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
         topo_target_input_nodes: List of target nodes for the input boundary nodes, in topological order.
         output_mapping: Dict mapping subgraph output boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
-        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
     Returns:
-        Modified target_graph.
+        Modified target_graph_module.
     """
     new_node_names = set()
     old_to_new = {}
@@ -387,6 +387,7 @@ def insert_subgraph(
                     node=target_input,
                     current_size=get_feature_dims(target_input.meta["tensor_meta"].shape, safe_dims=safe_dims),
                     target_size=get_feature_dims(node.args[j].meta["tensor_meta"].shape, safe_dims=safe_dims),
+                    safe_dims=safe_dims,
                     target_user=new_node
                 )
         else:
@@ -435,6 +436,7 @@ def insert_subgraph(
                 node=new_out_node,
                 current_size=get_feature_dims(sub_out.meta["tensor_meta"].shape, safe_dims=safe_dims),
                 target_size=get_feature_dims(first_arg_shape, safe_dims=safe_dims),
+                safe_dims=safe_dims,
                 target_user=user
             )
 

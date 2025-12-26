@@ -310,7 +310,8 @@ def _add_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torch.f
         
         # Use the utility function to add branch nodes
         graph, new_node, branch1_node, branch2_node, branch1_shape, branch2_shape = add_branch_nodes(
-            graph, reference_node, branch1_module, branch2_module
+            graph, reference_node, branch1_module, branch2_module,
+            safe_dims=safe_dims
         )
         
         # Adapt branch nodes if needed to ensure they have compatible shapes
