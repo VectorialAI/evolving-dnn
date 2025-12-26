@@ -27,6 +27,7 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
     subgraph_nodes = set()
     lowest_num_boundary_nodes = float('inf')
     broken_subgraphs = 0
+    insert_subgraph_kwargs = None
     max_subgraph_attempts = kwargs.get("max_subgraph_attempts", 100)
     for attempt in range(max_subgraph_attempts):
         try:
@@ -75,6 +76,13 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
             logging.warning(f"error finding subgraph: {e}")
             broken_subgraphs += 1
     logging.debug(f"broken_subgraphs: {broken_subgraphs}")
+
+    if insert_subgraph_kwargs is None:
+        raise ValueError(
+            f"No valid crossover subgraph found after {max_subgraph_attempts} attempts "
+            f"(broken_subgraphs={broken_subgraphs}) for child={getattr(child, 'id', None)} "
+            f"parent={getattr(parent, 'id', None)}. Crossover aborted."
+        )
 
     # Extract node names for highlighting
     subgraph_node_names = {node.name for node in insert_subgraph_kwargs["subgraph_nodes"]}
