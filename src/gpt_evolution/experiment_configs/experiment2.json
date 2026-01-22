@@ -1,0 +1,5 @@
+{
+    "training": {
+        "flops_budget": 1e14
+    }
+}

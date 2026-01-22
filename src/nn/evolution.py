@@ -125,6 +125,7 @@ class NeuralNetworkEvolution(Evolution):
             ax.set_title(f"Individual {individual_id} Training Loss")
             ax.set_xlabel("Tokens Processed")
             ax.set_ylabel("Training Loss")
+            ax.set_ylim(0, 11)
             ax.grid(True, alpha=0.3)
             fig.tight_layout()
             fig.savefig(filepath, bbox_inches="tight")
