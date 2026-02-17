@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import logging
 import math
 import time
+from typing import TYPE_CHECKING
 
 import torch
 from ptflops import get_model_complexity_info
@@ -10,6 +13,48 @@ from torch.utils.data import DataLoader
 from ..mingpt_altered.trainer import Trainer
 from .individual import NeuralNetworkIndividual
 from .dataset import HuggingFaceIterableDataset
+
+if TYPE_CHECKING:
+    from .gpu_manager import GPUManager
+
+
+def estimate_vram_bytes(
+    model: torch.nn.Module,
+    batch_size: int,
+    block_size: int,
+) -> int:
+    """Return a conservative estimate of GPU VRAM needed to train *model*.
+
+    Accounts for parameters, Adam optimizer states (2x params), gradients,
+    and a rough activation estimate.
+    """
+    param_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    # Adam keeps first and second moment estimates (same shape as params)
+    optimizer_bytes = param_bytes * 2
+    gradient_bytes = param_bytes
+
+    # Rough activation estimate: batch_size * sequence_length * largest_dim * 4 bytes
+    # We scan all linear/embedding layers to find the largest hidden dim.
+    largest_dim = 0
+    for module in model.modules():
+        if isinstance(module, torch.nn.Linear):
+            largest_dim = max(largest_dim, module.out_features)
+        elif isinstance(module, torch.nn.Embedding):
+            largest_dim = max(largest_dim, module.embedding_dim)
+    if largest_dim == 0:
+        largest_dim = 512  # fallback
+    activation_bytes = batch_size * block_size * largest_dim * 4  # float32
+
+    total = param_bytes + optimizer_bytes + gradient_bytes + activation_bytes
+    logging.debug(
+        "VRAM estimate: params=%.1fMB  optim=%.1fMB  grads=%.1fMB  acts=%.1fMB  total=%.1fMB",
+        param_bytes / 1e6,
+        optimizer_bytes / 1e6,
+        gradient_bytes / 1e6,
+        activation_bytes / 1e6,
+        total / 1e6,
+    )
+    return total
 
 def calculate_fitness(
     individual: NeuralNetworkIndividual,
@@ -25,6 +70,7 @@ def calculate_fitness(
     secondary_iter_timeout: float = 0.2,
     flops_budget: int = None,
     validation_batch_size: int = 32,
+    gpu_manager: GPUManager | None = None,
 ) -> float:
     """
     Calculate fitness of a GPT model by training it and returning negative loss
@@ -89,6 +135,59 @@ def calculate_fitness(
     # Ensure trainer runs desired number of steps
     individual.train_config.training_total_batches = num_train_steps
 
+    # --- GPU acquisition via GPUManager (if provided) ---
+    batch_size_for_est = int(getattr(individual.train_config, "batch_size", 1))
+    estimated_bytes = 0
+    if gpu_manager is not None:
+        estimated_bytes = estimate_vram_bytes(individual.graph_module, batch_size_for_est, block_size)
+        device = gpu_manager.acquire(estimated_bytes)
+        individual.train_config.device = device
+        logging.info(f"Individual {individual.id}: acquired device {device} (est. {estimated_bytes / 1e6:.1f} MB)")
+
+    try:
+        return _run_training_and_eval(
+            individual=individual,
+            iterable_train_dataset=iterable_train_dataset,
+            iterable_test_dataset=iterable_test_dataset,
+            tokenizer=tokenizer,
+            block_size=block_size,
+            num_train_steps=num_train_steps,
+            device=device,
+            total_batches_for_evaluation=total_batches_for_evaluation,
+            validation_batch_size=validation_batch_size,
+            loss_log_frequency=loss_log_frequency,
+            iter_timeout=iter_timeout,
+            secondary_iter_timeout=secondary_iter_timeout,
+        )
+    finally:
+        # Always move model back to CPU and release the GPU reservation
+        individual.graph_module = individual.graph_module.to('cpu')
+        if 'cuda' in device:
+            torch.cuda.empty_cache()
+        if gpu_manager is not None and estimated_bytes:
+            gpu_manager.release(device, estimated_bytes)
+            logging.info(f"Individual {individual.id}: released device {device}")
+
+
+def _run_training_and_eval(
+    individual: NeuralNetworkIndividual,
+    iterable_train_dataset,
+    iterable_test_dataset,
+    tokenizer,
+    block_size: int,
+    num_train_steps: int,
+    device: str,
+    total_batches_for_evaluation: int,
+    validation_batch_size: int,
+    loss_log_frequency: int,
+    iter_timeout: float,
+    secondary_iter_timeout: float,
+) -> float:
+    """Inner helper that runs training + evaluation and returns the fitness.
+
+    Separated so that the caller can wrap this in a try/finally for GPU
+    resource cleanup.
+    """
     # Create train dataset
     train_dataset = HuggingFaceIterableDataset(
         iterable_train_dataset,
@@ -145,9 +244,6 @@ def calculate_fitness(
         batch_size=validation_batch_size
     )
     evaluation_duration_seconds = time.time() - eval_start_time
-
-    individual.graph_module = individual.graph_module.to('cpu')  # Move the model back to CPU, since we're not going to run it again
-    if device == 'cuda': torch.cuda.empty_cache()
 
     fitness = -perplexity  # negative perplexity as fitness (lower perplexity = better) so that we can go uppies :)
 

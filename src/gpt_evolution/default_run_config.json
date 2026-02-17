@@ -55,7 +55,9 @@
       "flops_budget": 1e13,
       "loss_log_frequency": 100,
       "iter_timeout": 20.0,
-      "secondary_iter_timeout": 0.2
+      "secondary_iter_timeout": 0.2,
+      "max_parallel_evaluations": 1,
+      "vram_safety_margin": 0.80
     },
     "logging": {
       "overwrite_logs": false  
