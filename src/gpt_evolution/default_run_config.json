@@ -17,7 +17,7 @@
       "random_seed": 42,
       "target_population_size": 10,
       "num_children_per_generation": 10,
-      "num_generations": 20,
+      "num_generations": 10,
       "crossover_instead_of_mutation_rate": 0.5,
       "max_subgraph_attempts": 100,
       "unremovable_node_targets": ["torch.nn.functional.softmax", "torch.add", "torch.cat", "torch.mul"],
@@ -31,7 +31,7 @@
         "mutation_add_relu": 0.2,
         "mutation_add_skip_connection": 0.2,
         "mutation_add_branch": 0.2,
-        "mutation_remove_node": 0.5
+        "mutation_remove_node": 0.2
       },
       "crossover_probabilities": {
         "crossover_subgraph": 0.35,
@@ -52,7 +52,7 @@
       "device": "cuda",
       "validation_batch_size": 32,
       "evaluation_total_batches": 20,
-      "flops_budget": 1e14,
+      "flops_budget": 1e13,
       "loss_log_frequency": 100,
       "iter_timeout": 20.0,
       "secondary_iter_timeout": 0.2
