@@ -149,6 +149,14 @@ def random_subgraph(graph_module: torch.fx.GraphModule, num_nodes: int):
             if isinstance(arg, torch.fx.Node):
                 if arg in subgraph_nodes:
                     input_mapping[node].append(arg)
+                elif arg.op == "get_attr":
+                    # get_attr nodes (tensor constants, parameters, buffers) must be
+                    # included in the subgraph so they get copied to the target graph.
+                    # They are excluded from _is_allowed_subgraph_node_type (to prevent
+                    # them from being BFS anchors/neighbors), but when a subgraph node
+                    # depends on one, we still need to carry it along.
+                    _add_to_subgraph(arg)
+                    input_mapping[node].append(arg)
                 elif _has_float_dtype(arg):
                     input_mapping[node].append(None)  # placeholder for target graph replacement arg
                 elif _is_allowed_subgraph_node_type(arg):  # if neighbor node and has no shape, add it to the subgraph
