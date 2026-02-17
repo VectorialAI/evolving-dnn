@@ -38,7 +38,7 @@ class GPUManager:
 
         for i in range(self._num_devices):
             props = torch.cuda.get_device_properties(i)
-            total = props.total_mem
+            total = props.total_memory
             usable = int(total * vram_safety_fraction)
             self._total_bytes.append(total)
             self._usable_bytes.append(usable)
