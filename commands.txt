@@ -1,10 +1,11 @@
 In a brand new ubuntu 20_04 server, run the following commands manually to run an experiment:
 
 apt update && \
-apt install git software-properties-common graphviz screen rsync -y && \
-git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
+apt install git software-properties-common graphviz screen rsync nano -y && \
+git clone https://www.github.com/VectorialAI/evolving-dnn && \
 cd evolving-dnn/ && \
-git checkout experiments && \
+export HF_HUB_ENABLE_HF_TRANSFER=0 && \
+git checkout expmart
 chmod +x run_experiment.sh && \
 ./run_experiment.sh /workspace/experiments/experiment1
 
