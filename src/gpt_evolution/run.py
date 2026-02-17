@@ -12,6 +12,7 @@ from ..experiment_recorder import ExperimentRecorder
 from ..gpt_evolution.initial_population import generate_initial_population
 from ..gpt_evolution.helpers import set_random_seeds, deep_merge_dicts, configure_logger, validate_flops_config
 from ..nn.evaluate import calculate_fitness
+from ..nn.gpu_manager import GPUManager
 from ..nn.individual import NeuralNetworkIndividual
 from ..nn.evolution import NeuralNetworkEvolution
 from ..nn.visualization import log_best_individual
@@ -216,6 +217,17 @@ def run_experiment(
     }
     experiment_recorder.update_system_info({"requested_training_device": training_config["device"]})
 
+    # Set up GPU manager for VRAM-aware parallel evaluation
+    max_parallel = training_config.get("max_parallel_evaluations", 1)
+    gpu_manager = None
+    if max_parallel > 1 and torch.cuda.is_available():
+        vram_safety = training_config.get("vram_safety_margin", 0.80)
+        gpu_manager = GPUManager(vram_safety_fraction=vram_safety)
+        logging.info(f"Parallel evaluation enabled: max_parallel={max_parallel}, vram_safety={vram_safety}")
+    elif max_parallel > 1:
+        logging.warning("max_parallel_evaluations > 1 but CUDA is not available; falling back to sequential evaluation")
+        max_parallel = 1
+
     # Note: FLOPs-based batch computation is applied per-individual below in fitness_wrapper
 
     # Create a wrapper for calculate_fitness that only takes individual
@@ -234,6 +246,7 @@ def run_experiment(
             secondary_iter_timeout=training_config.get("secondary_iter_timeout", 0.2),
             flops_budget=training_config.get("flops_budget"),
             validation_batch_size=training_config.get("validation_batch_size", 32),
+            gpu_manager=gpu_manager,
         )
 
     evolution = NeuralNetworkEvolution(
@@ -254,6 +267,7 @@ def run_experiment(
         ],
         target_population_size=evolution_config["target_population_size"],
         num_children_per_generation=evolution_config["num_children_per_generation"],
+        max_parallel_evaluations=max_parallel,
         experiment_path=experiment_path,
         visualize_graphs=run_config.get("visualization", True),
         max_subgraph_attempts=evolution_config.get("max_subgraph_attempts", 100),

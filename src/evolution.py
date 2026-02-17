@@ -2,6 +2,7 @@ import copy
 import logging
 import math
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from .individual import Individual
@@ -19,6 +20,7 @@ class Evolution:
         target_population_size: bool = 100,
         num_children_per_generation: int = 100,
         visualize_graphs: bool = True,
+        max_parallel_evaluations: int = 1,
         **kwargs,
     ):
         """
@@ -47,6 +49,7 @@ class Evolution:
         self.id_counter = len(self.population)
         self.visualize_graphs = visualize_graphs
         self.experiment_recorder = experiment_recorder
+        self.max_parallel_evaluations = max_parallel_evaluations
 
         self.kwargs = kwargs
         self.kwargs['visualize_graphs'] = visualize_graphs  # Add visualize_graphs to kwargs so it gets passed to crossover/mutation functions
@@ -61,15 +64,15 @@ class Evolution:
         for individual in self.population:
             self.experiment_recorder.record_initial_individual(individual.id, generation=self.generation)
 
-        for individual in self.population:  # evaluate fitness for initial population
-            self._evaluate(individual)
+        self._evaluate_batch(self.population)
         
         self._log_generation()
         for gen in range(1, num_generations):  # first generation was initial_population
             self.generation = gen
 
-            # Create new population through crossover and mutation
+            # Phase 1: Create all children (CPU-only, sequential)
             new_children = []
+            children_to_evaluate = []
             while len(new_children) < self.num_children_per_generation:
                 parent1, parent2 = random.sample(self.population, 2)  # TODO should this sample with or without replacement?
                 child = self._copy_individual(parent1)
@@ -102,13 +105,44 @@ class Evolution:
 
                 if not successful_child:
                     self._log_individual(child)
-                    continue
-                self._evaluate(child)
+                else:
+                    children_to_evaluate.append(child)
+
+            # Phase 2: Evaluate all children (potentially in parallel on GPU)
+            self._evaluate_batch(children_to_evaluate)
 
             self.population.extend(new_children)
             
             self._selection()
             self._log_generation()
+
+    def _evaluate_batch(self, individuals: list[Individual]):
+        """Evaluate a batch of individuals, potentially in parallel.
+
+        When ``max_parallel_evaluations`` is 1 this behaves identically to the
+        old sequential loop.  With a higher value, evaluations are submitted to
+        a thread pool so that multiple models can occupy different GPUs (or
+        share one GPU with VRAM-aware scheduling).
+        """
+        if self.max_parallel_evaluations <= 1:
+            for individual in individuals:
+                self._evaluate(individual)
+            return
+
+        with ThreadPoolExecutor(max_workers=self.max_parallel_evaluations) as executor:
+            future_to_individual = {
+                executor.submit(self._evaluate, ind): ind
+                for ind in individuals
+            }
+            for future in as_completed(future_to_individual):
+                ind = future_to_individual[future]
+                try:
+                    future.result()
+                except Exception:
+                    logging.exception(
+                        "Unexpected error during parallel evaluation of individual %s",
+                        ind.id,
+                    )
 
     def _evaluate(self, individual: Individual):
         individual.evaluation_metrics = None
