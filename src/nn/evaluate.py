@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,10 @@ import torch
 from ptflops import get_model_complexity_info
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+
+# ptflops monkey-patches global functions (e.g. F.relu) and is not thread-safe.
+# Serialize all calls through this lock.
+_flops_lock = threading.Lock()
 
 from ..mingpt_altered.trainer import Trainer
 from .individual import NeuralNetworkIndividual
@@ -370,15 +375,16 @@ def calculate_model_flops(
         return torch.zeros(batch_size, seq_len, dtype=dtype)
     
     try:
-        # Compute MACs for a single forward pass with this batch size
-        macs, _params = get_model_complexity_info(
-            model,
-            input_res=(batch_size, seq_len),
-            input_constructor=input_constructor,
-            as_strings=False,
-            print_per_layer_stat=False,
-            verbose=False,
-        )
+        # ptflops monkey-patches global state, so serialize access.
+        with _flops_lock:
+            macs, _params = get_model_complexity_info(
+                model,
+                input_res=(batch_size, seq_len),
+                input_constructor=input_constructor,
+                as_strings=False,
+                print_per_layer_stat=False,
+                verbose=False,
+            )
         
         # Check if MACs calculation was successful
         if macs is None or macs <= 0:
