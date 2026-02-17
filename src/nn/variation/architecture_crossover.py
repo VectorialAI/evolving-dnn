@@ -367,8 +367,15 @@ def insert_subgraph(
             target_graph_module.add_submodule(new_module_name, m=copied_module)
             new_node_names.add(new_module_name)
         elif node.op == "get_attr":
-            new_attr_name = get_unique_name(target_graph_module, node.target)
-            original_attr_value = getattr(node.graph.owning_module, node.target)
+            # Flatten dotted target path (e.g. "transformer.h.1.attn.bias") to a
+            # single-level attribute name so setattr/getattr work correctly.
+            flat_target = node.target.replace(".", "_")
+            new_attr_name = get_unique_name(target_graph_module, flat_target)
+            # Traverse the dotted path on the source module to get the real value
+            source_module = node.graph.owning_module
+            for attr_part in node.target.split("."):
+                source_module = getattr(source_module, attr_part)
+            original_attr_value = source_module
             setattr(target_graph_module, new_attr_name, copy.deepcopy(original_attr_value))
             new_node_names.add(new_attr_name)
 
