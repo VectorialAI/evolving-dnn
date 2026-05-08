@@ -149,6 +149,14 @@ def random_subgraph(graph_module: torch.fx.GraphModule, num_nodes: int):
             if isinstance(arg, torch.fx.Node):
                 if arg in subgraph_nodes:
                     input_mapping[node].append(arg)
+                elif arg.op == "get_attr":
+                    # get_attr nodes (tensor constants, parameters, buffers) must be
+                    # included in the subgraph so they get copied to the target graph.
+                    # They are excluded from _is_allowed_subgraph_node_type (to prevent
+                    # them from being BFS anchors/neighbors), but when a subgraph node
+                    # depends on one, we still need to carry it along.
+                    _add_to_subgraph(arg)
+                    input_mapping[node].append(arg)
                 elif _has_float_dtype(arg):
                     input_mapping[node].append(None)  # placeholder for target graph replacement arg
                 elif _is_allowed_subgraph_node_type(arg):  # if neighbor node and has no shape, add it to the subgraph
@@ -359,8 +367,15 @@ def insert_subgraph(
             target_graph_module.add_submodule(new_module_name, m=copied_module)
             new_node_names.add(new_module_name)
         elif node.op == "get_attr":
-            new_attr_name = get_unique_name(target_graph_module, node.target)
-            original_attr_value = getattr(node.graph.owning_module, node.target)
+            # Flatten dotted target path (e.g. "transformer.h.1.attn.bias") to a
+            # single-level attribute name so setattr/getattr work correctly.
+            flat_target = node.target.replace(".", "_")
+            new_attr_name = get_unique_name(target_graph_module, flat_target)
+            # Traverse the dotted path on the source module to get the real value
+            source_module = node.graph.owning_module
+            for attr_part in node.target.split("."):
+                source_module = getattr(source_module, attr_part)
+            original_attr_value = source_module
             setattr(target_graph_module, new_attr_name, copy.deepcopy(original_attr_value))
             new_node_names.add(new_attr_name)
 
