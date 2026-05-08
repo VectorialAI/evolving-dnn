@@ -1,9 +1,7 @@
-# python 3.11.11
-torch==2.6.0
 pydot==3.0.4
 regex==2024.11.6
-numpy==2.2.4
-tokenizers==0.21.1
-datasets==3.6.0
-ptflops==0.7.4
+numpy<3.0
+tokenizers<1.0
+datasets<4.0
+ptflops<1.0
 matplotlib==3.9.2
