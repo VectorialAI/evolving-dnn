@@ -251,6 +251,8 @@ class ExperimentRecorder:
             return
 
         generation_nodes: Dict[int, list[int]] = {}
+        parent_map: Dict[int, list[int]] = {}
+        origin_map: Dict[int, str] = {}
         for entry in individuals.values():
             creation = entry.get("creation")
             if not creation:
@@ -263,6 +265,21 @@ class ExperimentRecorder:
             except (TypeError, ValueError):
                 continue
             generation_nodes.setdefault(int(generation), []).append(individual_id)
+
+            # Track ancestry information so we can color by lineage root
+            origin = creation.get("origin")
+            if origin is not None:
+                origin_map[individual_id] = str(origin)
+
+            raw_parents = creation.get("parents") or []
+            parents: list[int] = []
+            for p in raw_parents:
+                try:
+                    parents.append(int(p))
+                except (TypeError, ValueError):
+                    continue
+            if parents:
+                parent_map[individual_id] = parents
 
         if not generation_nodes:
             return
@@ -293,6 +310,55 @@ class ExperimentRecorder:
                 jitter = _jitter(node_id) * (x_gap * 0.35)
                 x_pos = max(margin_x, min(svg_width - margin_x, x_pos + jitter))
                 node_positions[node_id] = (x_pos, y_pos)
+
+        # ------------------------------------------------------------------ #
+        # Lineage coloring (epidemiology-style): each root lineage gets
+        # a distinct hue, and all descendants inherit that color.
+        # ------------------------------------------------------------------ #
+        root_cache: Dict[int, int] = {}
+
+        def _find_root(individual_id: int, visiting: Optional[set[int]] = None) -> int:
+            """Return the root ancestor for an individual, used to define lineages.
+
+            - If the individual is from the initial population, it is its own root.
+            - Otherwise we follow the first parent recursively (primary lineage).
+            - Cycles are guarded against by a small visited set.
+            """
+            if individual_id in root_cache:
+                return root_cache[individual_id]
+
+            if visiting is None:
+                visiting = set()
+            if individual_id in visiting:
+                # Fallback in case of unexpected cycles
+                root_cache[individual_id] = individual_id
+                return individual_id
+
+            visiting.add(individual_id)
+            origin = origin_map.get(individual_id)
+            parents = parent_map.get(individual_id, [])
+
+            if origin == "initial_population" or not parents:
+                root = individual_id
+            else:
+                # Use the first parent as the primary lineage ancestor
+                root = _find_root(parents[0], visiting)
+
+            visiting.remove(individual_id)
+            root_cache[individual_id] = root
+            return root
+
+        # Assign each root lineage a unique hue on the color wheel
+        root_hues: Dict[int, float] = {}
+        unique_roots = sorted({_find_root(node_id) for node_id in node_positions})
+        for idx, root_id in enumerate(unique_roots):
+            # Use a golden-angle step to spread hues visually
+            hue = (idx * 137.508) % 360.0
+            root_hues[root_id] = hue
+
+        def _lineage_hue(individual_id: int) -> float:
+            root_id = _find_root(individual_id)
+            return root_hues.get(root_id, 210.0)  # default to a calm blue
 
         final_generation_ids: set[int] = set()
         if self.data.get("generations"):
@@ -394,11 +460,14 @@ class ExperimentRecorder:
             if dist > 0:
                 x2 -= (dx / dist) * node_radius
                 y2 -= (dy / dist) * node_radius
-            # First parent (primary) gets blue arrow, others get gray
+
+            hue = _lineage_hue(child_id)
+            # Primary parent edges are colored by lineage; secondary are muted
             if parent_idx == 0:
-                stroke_color, marker_id = "#4c8bf5", "arrowhead-primary"
+                stroke_color, marker_id = f"hsl({hue:.0f}, 80%, 35%)", "arrowhead-primary"
             else:
-                stroke_color, marker_id = "#888", "arrowhead"
+                stroke_color, marker_id = f"hsl({hue:.0f}, 10%, 65%)", "arrowhead"
+
             svg_lines.append(
                 f'  <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{stroke_color}" stroke-width="1" marker-end="url(#{marker_id})">'
             )
@@ -409,12 +478,24 @@ class ExperimentRecorder:
         for node_id, (x_pos, y_pos) in node_positions.items():
             highlight = node_id in final_generation_ids
             has_children = node_id in nodes_with_children
+
+            hue = _lineage_hue(node_id)
             if highlight:
-                fill, stroke, text_color = "#4c8bf5", "#2457d3", "#fff"
+                # Emphasize final generation members in their lineage color
+                fill = f"hsl({hue:.0f}, 80%, 45%)"
+                stroke = f"hsl({hue:.0f}, 85%, 25%)"
+                text_color = "#fff"
             elif not has_children:
-                fill, stroke, text_color = "#e0e0e0", "#aaa", "#666"
+                # Terminal but non-final nodes: pale version of lineage color
+                fill = f"hsl({hue:.0f}, 40%, 88%)"
+                stroke = f"hsl({hue:.0f}, 45%, 55%)"
+                text_color = "#666"
             else:
-                fill, stroke, text_color = "#f6f8fa", "#9aa0a6", "#202124"
+                # Internal nodes: medium intensity lineage color
+                fill = f"hsl({hue:.0f}, 60%, 82%)"
+                stroke = f"hsl({hue:.0f}, 65%, 45%)"
+                text_color = "#202124"
+
             svg_lines.append(
                 f'  <circle cx="{x_pos:.1f}" cy="{y_pos:.1f}" r="{node_radius}" fill="{fill}" stroke="{stroke}" stroke-width="1.5" />'
             )

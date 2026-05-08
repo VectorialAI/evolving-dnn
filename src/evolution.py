@@ -105,7 +105,7 @@ class Evolution:
                 self.experiment_recorder.record_child_creation(
                     individual_id=child.id,
                     generation=self.generation,
-                    parents=(parents[0].id, parents[1].id),
+                    parents=tuple([parent.id for parent in parents]),
                     operations=operations,
                     strategy=strategy,
                 )
