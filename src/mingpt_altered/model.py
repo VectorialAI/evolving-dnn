@@ -71,21 +71,22 @@ class CausalSelfAttention(nn.Module):
             sequence_length = self.block_size
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        attn_output = self.c_attn(x)
+        attn_output = self.c_attn(x)  # (B, T, 3 * C)
         q = attn_output.narrow(2, 0, self.n_embd)
         k = attn_output.narrow(2, self.n_embd, self.n_embd)
         v = attn_output.narrow(2, 2 * self.n_embd, self.n_embd)
-        k = k.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head)  # (B, T, nh, hs)
+        q = q.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head)  # (B, T, nh, hs)
+        v = v.view(batch_size, sequence_length, self.n_head, embedding_dim // self.n_head)  # (B, T, nh, hs)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = _masked_fill_softmax(att, self.bias[:,:,:sequence_length,:sequence_length] == 0, float('-inf'), dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = _transpose_contiguous(y, 1, 2).view(batch_size, sequence_length, embedding_dim) # re-assemble all head outputs side by side
-        # y = y.transpose(1, 2).contiguous().view(batch_size, sequence_length, embedding_dim)
+        y = _self_attention_transposes(
+            k, q, v,
+            self.bias[:,:,:sequence_length,:sequence_length],
+            self.attn_dropout,
+            sequence_length,
+            embedding_dim,
+            batch_size,
+        )
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
@@ -94,6 +95,28 @@ class CausalSelfAttention(nn.Module):
 @torch.fx.wrap
 def _transpose_contiguous(x: torch.Tensor, dim0: int, dim1: int) -> torch.Tensor:
     return x.transpose(dim0, dim1).contiguous()
+
+@torch.fx.wrap
+def _self_attention_transposes(
+    k: torch.Tensor,
+    q: torch.Tensor,
+    v: torch.Tensor,
+    bias: torch.Tensor,
+    attn_dropout: nn.Dropout,
+    sequence_length: int,
+    embedding_dim: int,
+    batch_size: int,
+) -> torch.Tensor:
+    k = k.transpose(1, 2) # (B, nh, T, hs)
+    q = q.transpose(1, 2) # (B, nh, T, hs)
+    v = v.transpose(1, 2) # (B, nh, T, hs)
+
+    # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+    att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+    att = _masked_fill_softmax(att, bias[:,:,:sequence_length,:sequence_length] == 0, float('-inf'), dim=-1)
+    att = attn_dropout(att)
+    y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+    return _transpose_contiguous(y, 1, 2).view(batch_size, sequence_length, embedding_dim) # re-assemble all head outputs side by side
 
 class Block(nn.Module):
     """ an unassuming Transformer block """

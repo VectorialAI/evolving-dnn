@@ -8,6 +8,13 @@ from torch.fx.passes.shape_prop import ShapeProp
 from ..individual_graph_module import NeuralNetworkIndividualGraphModule
 
 
+# FX node ops we should never treat as eligible mutation/crossover targets.
+# - placeholder: graph inputs
+# - output: graph output
+# - get_attr: parameters/buffers/constants (e.g., attention masks like `bias`)
+EXCLUDED_NODE_OPS = ["placeholder", "output", "get_attr"]
+
+
 def get_unique_name(graph, base_name: str) -> str:
     """
     Generates a unique name for a node in the graph by appending incrementing numbers.
@@ -129,7 +136,7 @@ def add_skip_connection(graph, second_node, first_node, torch_function=torch.add
 
     return graph, new_node
 
-def add_branch_nodes(graph: NeuralNetworkIndividualGraphModule, reference_node, branch1_module, branch2_module):
+def add_branch_nodes(graph: NeuralNetworkIndividualGraphModule, reference_node, branch1_module, branch2_module, safe_dims: int):
     """
     Adds two branch nodes in parallel after the reference node and connects them with a skip connection.
     
@@ -138,6 +145,7 @@ def add_branch_nodes(graph: NeuralNetworkIndividualGraphModule, reference_node, 
         reference_node: The node after which the branch nodes will be inserted
         branch1_module: The module for the first branch
         branch2_module: The module for the second branch
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
     Returns:
         tuple: (graph, new_node, branch1_node, branch2_node, branch1_shape, branch2_shape)
             - graph: The modified graph
@@ -172,8 +180,8 @@ def add_branch_nodes(graph: NeuralNetworkIndividualGraphModule, reference_node, 
     ShapeProp(graph).propagate(graph.example_input)
     
     # Infer the shapes of the branch nodes from the metadata, pass through get_feature_dims to remove batch dimension
-    branch1_shape = get_feature_dims(branch1_node.meta['tensor_meta'].shape)
-    branch2_shape = get_feature_dims(branch2_node.meta['tensor_meta'].shape)
+    branch1_shape = get_feature_dims(branch1_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
+    branch2_shape = get_feature_dims(branch2_node.meta['tensor_meta'].shape, safe_dims=safe_dims)
 
     # Create a skip connection between the two branch nodes
     with graph.graph.inserting_after(branch2_node):
@@ -184,21 +192,23 @@ def add_branch_nodes(graph: NeuralNetworkIndividualGraphModule, reference_node, 
 
     return graph, new_node, branch1_node, branch2_node, branch1_shape, branch2_shape
 
-def get_feature_dims(shape):
+def get_feature_dims(shape, safe_dims: int):
     """
-    Helper function to get feature dimensions (excluding batch dimension) from a shape tuple.
+    Helper function to get feature dimensions from a shape tuple.
     
     Args:
         shape: A shape tuple that includes batch dimension
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
     Returns:
-        tuple: Feature dimensions only (excluding batch dimension)
+        tuple: Feature dimensions only (excluding safe_dims dimensions)
     """
     if shape is None:
         return None
-    # Skip the batch dimension (first dimension)
-    if len(shape) > 1:
-        return tuple(shape[1:])
+    # Skip the safe_dims dimensions from the beginning of the shape tuple
+    if len(shape) > safe_dims:
+        return tuple(shape[safe_dims:])
     else:
+        # TODO: Should this throw a flag or is this here for backwards compatibility?
         return tuple(shape)
 
 def node_has_shape(node: torch.fx.Node):

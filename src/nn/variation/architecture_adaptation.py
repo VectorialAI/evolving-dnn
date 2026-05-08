@@ -31,7 +31,7 @@ def _adapt_tensor_size(graph, node, current_size: int, target_size: int, target_
                 graph, 
                 node, 
                 torch.repeat_interleave, 
-                kwargs={"repeats": length_multiplier, "dim": 1},
+                kwargs={"repeats": length_multiplier, "dim": -1},
                 target_user=target_user  # Intermediate node
             )
             logging.debug(f"Added repeat node {repeat_node.name} after node {node.name}, repeats: {length_multiplier}")
@@ -71,12 +71,13 @@ def _adapt_tensor_size(graph, node, current_size: int, target_size: int, target_
 class ReshapeModule(nn.Module):
     """A PyTorch module for reshaping tensors to a specific target size."""
     
-    def __init__(self, target_size):
+    def __init__(self, target_size, safe_dims):
         super().__init__()
         self.target_size = target_size
+        self.safe_dims = safe_dims
     
     def forward(self, x):
-        return x.reshape(-1, *self.target_size)
+        return x.reshape(*x.shape[:self.safe_dims], *self.target_size)
 
 @torch.fx.wrap
 def custom_cat(tensor1, tensor2, dim=-1):
@@ -121,15 +122,16 @@ def _unflatten_linear_flatten(graph, node, adapt_shape_values: tuple[int, int, i
     
     return graph, node
 
-def adapt_node_shape_basic(graph, node, current_size, target_size, target_user=None, adapt_type='regular'):
+def adapt_node_shape_basic(graph, node, current_size, target_size, safe_dims: int, target_user=None, adapt_type='regular', ):
     """
     Adapts a node's output shape to match a target size using repetition, adaptive pooling or circular padding.
     
     Args:
         graph: The FX graph
         node: The node whose shape needs to be adapted
-        current_size: Current size of the node's output, no batch dimension
-        target_size: Desired size of the node's output, no batch dimension
+        current_size: Current size of the node's output, excluding safe_dims dimensions
+        target_size: Desired size of the node's output, excluding safe_dims dimensions
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
         target_user: Optional specific node that should use the adapted output. If None, all users will be updated.
         adapt_type: Type of adaptation to use. Can be 'regular' or 'linear'
     Returns:
@@ -159,7 +161,7 @@ def adapt_node_shape_basic(graph, node, current_size, target_size, target_user=N
         return add_specific_node(
             graph,
             node,
-            ReshapeModule(target_size),
+            ReshapeModule(target_size, safe_dims),
             target_user=target_user
         )
     
@@ -176,7 +178,7 @@ def adapt_node_shape_basic(graph, node, current_size, target_size, target_user=N
         graph, node = add_specific_node(
             graph, 
             node, 
-            nn.Flatten(start_dim=1, end_dim=-1),
+            nn.Flatten(start_dim=safe_dims, end_dim=-1),
             target_user=target_user
         )
     
@@ -194,7 +196,7 @@ def adapt_node_shape_basic(graph, node, current_size, target_size, target_user=N
         graph, node = add_specific_node(
             graph, 
             node, 
-            nn.Unflatten(dim=1, unflattened_size=target_size),
+            nn.Unflatten(dim=safe_dims, unflattened_size=target_size),
             target_user=target_user
         )
     
@@ -206,13 +208,14 @@ def _calculate_gcf(a: int, b: int) -> int:
         a, b = b, a % b
     return a
 
-def gcf_adapt_node_shape(graph, node, current_size, target_size, target_user=None):
+def gcf_adapt_node_shape(graph, node, current_size, target_size, safe_dims: int, target_user=None):
     """
     Args:
         graph: The FX graph
         node: The node whose shape needs to be adapted
-        current_size: Current size of the node's output, no batch dimension
-        target_size: Desired size of the node's output, no batch dimension
+        current_size: Current size of the node's output, no safe_dims dimensions
+        target_size: Desired size of the node's output, no safe_dims dimensions
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
         target_user: Optional specific node that should use the adapted output. If None, all users will be updated.
     Returns:
         graph: The modified graph
@@ -233,7 +236,7 @@ def gcf_adapt_node_shape(graph, node, current_size, target_size, target_user=Non
     graph, node = add_specific_node(
         graph,
         node,
-        ReshapeModule((gcf, reduced_current)),
+        ReshapeModule((gcf, reduced_current), safe_dims),
         target_user=target_user
     )
     logging.debug(f"Reshaped to factor out GCF: (batch, {gcf}, {reduced_current})")
@@ -273,12 +276,12 @@ def gcf_adapt_node_shape(graph, node, current_size, target_size, target_user=Non
 
     if r1 != r2:
         # Create a slicing operation to get the first part
-        logging.debug(f"Slicing first part: dim=2, start=0, length={r1_slice_length}")
+        logging.debug(f"Slicing first part: dim=-1, start=0, length={r1_slice_length}")
         graph, r1_node = add_specific_node(
             graph,
             node,
             torch.narrow,
-            kwargs={"dim": 2, "start": 0, "length": r1_slice_length},
+            kwargs={"dim": -1, "start": 0, "length": r1_slice_length},
             target_user=target_user
         )
         logging.debug(f"Added narrow node for r1 slice (length={r1_slice_length})")
@@ -303,7 +306,7 @@ def gcf_adapt_node_shape(graph, node, current_size, target_size, target_user=Non
             graph,
             node,
             torch.narrow,
-            kwargs={"dim": 2, "start": r1_slice_length, "length": r2_slice_length},
+            kwargs={"dim": -1, "start": r1_slice_length, "length": r2_slice_length},
             target_user=concat_node
         )
         logging.debug(f"Added narrow node for r2 slice (length={r2_slice_length})")
@@ -320,23 +323,24 @@ def gcf_adapt_node_shape(graph, node, current_size, target_size, target_user=Non
     graph, concat_node = add_specific_node(
         graph,
         concat_node,
-        ReshapeModule(target_size),
+        ReshapeModule(target_size, safe_dims),
         target_user=target_user
     )
     logging.debug(f"Reshaped to final target shape {target_size}")
     return graph, concat_node
 
-def adapt_node_shape(graph, node, current_size, target_size, target_user=None, adapt_type='gcf'):
+def adapt_node_shape(graph, node, current_size, target_size, safe_dims: int, target_user=None, adapt_type='gcf'):
     """
     Adapts a node's output shape to match a target size using repetition, adaptive pooling or circular padding.
     
     Args:
         graph: The FX graph
         node: The node whose shape needs to be adapted
-        current_size: Current size of the node's output, no batch dimension
-        target_size: Desired size of the node's output, no batch dimension
+        current_size: Current size of the node's output, excluding safe_dims dimensions
+        target_size: Desired size of the node's output, excluding safe_dims dimensions
         target_user: Optional specific node that should use the adapted output. If None, all users will be updated.
         adapt_type: Type of adaptation to use. Can be 'regular', 'linear', or 'gcf'
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple
     Returns:
         graph: The modified graph
         adapted_node: The node after shape adaptation
@@ -358,11 +362,11 @@ def adapt_node_shape(graph, node, current_size, target_size, target_user=None, a
         return add_specific_node(
             graph,
             node,
-            ReshapeModule(target_size),
+            ReshapeModule(target_size, safe_dims),
             target_user=target_user
         )
     
     if adapt_type == 'gcf':
-        return gcf_adapt_node_shape(graph, node, current_size, target_size, target_user)
+        return gcf_adapt_node_shape(graph, node, current_size, target_size, safe_dims, target_user)
     else:
-        return adapt_node_shape_basic(graph, node, current_size, target_size, target_user, adapt_type)
+        return adapt_node_shape_basic(graph, node, current_size, target_size, safe_dims, target_user, adapt_type)

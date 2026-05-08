@@ -258,6 +258,7 @@ def run_experiment(
         visualize_graphs=run_config.get("visualization", True),
         max_subgraph_attempts=evolution_config.get("max_subgraph_attempts", 100),
         unremovable_node_targets=evolution_config.get("unremovable_node_targets", []),
+        safe_dims=evolution_config.get("safe_dims", 2),
     )
     evolution.run_evolution(evolution_config["num_generations"])
 
