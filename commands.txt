@@ -2,10 +2,9 @@ In a brand new RunPod PyTorch 2.8.0 server, run the following commands manually 
 
 apt update && \
 apt install git software-properties-common graphviz screen rsync -y && \
-git clone https://www.github.com/PatrickNercessian/evolving-dnn && \
+git clone https://www.github.com/VectorialAI/evolving-dnn && \
 cd evolving-dnn/ && \
 export HF_HUB_ENABLE_HF_TRANSFER=0 && \
-git checkout experiments && \
 pip install -r requirements.txt && \
 screen -dmS experiment python -m src.gpt_evolution.run --experiment_path <EXPERIMENT_DIR_PATH> --config [CONFIG_JSON_PATH]
 
