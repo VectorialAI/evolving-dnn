@@ -1,0 +1,11 @@
+{
+    "training": {
+        "flops_budget": 1e14,
+        "max_parallel_evaluations": 5,
+        "secondary_iter_timeout": 0.4
+    },
+    "evolution": {
+        "target_population_size": 50,
+        "num_children_per_generation": 50
+    }
+}

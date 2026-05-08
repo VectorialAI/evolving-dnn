@@ -1,0 +1,10 @@
+{
+    "training": {
+      "flops_budget": 1e13,
+      "max_parallel_evaluations": 15
+    },
+    "evolution": {
+        "target_population_size": 50,
+        "num_children_per_generation": 50
+    }
+  }
