@@ -8,7 +8,7 @@ import torch
 from torch.fx.passes.shape_prop import ShapeProp
 
 from ..individual import NeuralNetworkIndividual
-from ..variation.utils import get_unique_name, node_has_shape
+from ..variation.utils import EXCLUDED_NODE_OPS, get_unique_name, node_has_shape, get_feature_dims
 from ..visualization import visualize_graph
 from ..variation.architecture_adaptation import adapt_node_shape
 
@@ -20,13 +20,14 @@ CROSSOVER_VISUALIZATION_DIR = "crossover_visualization"
 
 # TODO need to prune after to save computation
 
-def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndividual, **kwargs):
+def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndividual, safe_dims: int, **kwargs):
     crossover_visualization_dir = os.path.join(kwargs.get("experiment_path", ""), CROSSOVER_VISUALIZATION_DIR)
     os.makedirs(crossover_visualization_dir, exist_ok=True)
 
     subgraph_nodes = set()
     lowest_num_boundary_nodes = float('inf')
     broken_subgraphs = 0
+    insert_subgraph_kwargs = None
     max_subgraph_attempts = kwargs.get("max_subgraph_attempts", 100)
     for attempt in range(max_subgraph_attempts):
         try:
@@ -60,7 +61,7 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
                 continue
             
             # Try to find connections
-            input_mapping, topo_target_input_nodes, output_mapping = find_subgraph_connections(child.graph_module.graph, input_boundary_nodes, output_boundary_nodes)
+            input_mapping, topo_target_input_nodes, output_mapping = find_subgraph_connections(child.graph_module.graph, input_boundary_nodes, output_boundary_nodes, safe_dims)
             
             lowest_num_boundary_nodes = num_boundary_nodes
             logging.debug(f"Attempt {attempt + 1}: ACCEPTED - new best subgraph with {num_boundary_nodes} boundary nodes")
@@ -76,6 +77,13 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
             broken_subgraphs += 1
     logging.debug(f"broken_subgraphs: {broken_subgraphs}")
 
+    if insert_subgraph_kwargs is None:
+        raise ValueError(
+            f"No valid crossover subgraph found after {max_subgraph_attempts} attempts "
+            f"(broken_subgraphs={broken_subgraphs}) for child={getattr(child, 'id', None)} "
+            f"parent={getattr(parent, 'id', None)}. Crossover aborted."
+        )
+
     # Extract node names for highlighting
     subgraph_node_names = {node.name for node in insert_subgraph_kwargs["subgraph_nodes"]}
 
@@ -85,7 +93,7 @@ def crossover_subgraph(child: NeuralNetworkIndividual, parent: NeuralNetworkIndi
         random_int = random.randint(0, 1000000)
         visualize_graph(parent.graph_module, "model_graph_highlighted", os.path.join(crossover_visualization_dir, f"{random_int}_{parent.id}_graph_highlighted.svg"), highlight_nodes=subgraph_node_names)
 
-    child.graph_module, new_node_names = insert_subgraph(child.graph_module, **insert_subgraph_kwargs)
+    child.graph_module, new_node_names = insert_subgraph(child.graph_module, safe_dims, **insert_subgraph_kwargs)
 
     # Log successful subgraph insertion
     logging.info(f"Successfully inserted subgraph with {len(insert_subgraph_kwargs['subgraph_nodes'])} nodes into child {child.id} from parent {parent.id}")
@@ -141,6 +149,14 @@ def random_subgraph(graph_module: torch.fx.GraphModule, num_nodes: int):
             if isinstance(arg, torch.fx.Node):
                 if arg in subgraph_nodes:
                     input_mapping[node].append(arg)
+                elif arg.op == "get_attr":
+                    # get_attr nodes (tensor constants, parameters, buffers) must be
+                    # included in the subgraph so they get copied to the target graph.
+                    # They are excluded from _is_allowed_subgraph_node_type (to prevent
+                    # them from being BFS anchors/neighbors), but when a subgraph node
+                    # depends on one, we still need to carry it along.
+                    _add_to_subgraph(arg)
+                    input_mapping[node].append(arg)
                 elif _has_float_dtype(arg):
                     input_mapping[node].append(None)  # placeholder for target graph replacement arg
                 elif _is_allowed_subgraph_node_type(arg):  # if neighbor node and has no shape, add it to the subgraph
@@ -176,7 +192,7 @@ def random_subgraph(graph_module: torch.fx.GraphModule, num_nodes: int):
 
 def _is_allowed_subgraph_node_type(node: torch.fx.Node):
     # Reject placeholders / outputs
-    if node.op in ("placeholder", "output"):
+    if node.op in EXCLUDED_NODE_OPS:
         return False
 
     # Reject training-specific helper nodes
@@ -202,7 +218,8 @@ def _has_float_dtype(node: torch.fx.Node):
 def find_subgraph_connections(
     target_graph: torch.fx.Graph,
     input_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]],
-    output_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]]
+    output_mapping: dict[torch.fx.Node, list[torch.fx.Node|None]],
+    safe_dims: int
 ):
     """
     Finds compatible connection points between a subgraph and a target graph.
@@ -211,7 +228,7 @@ def find_subgraph_connections(
         target_graph: The graph to insert the subgraph into
         input_mapping: Dict mapping subgraph input boundary node -> target graph args. A None arg implies we need to select a compatible target arg.
         output_mapping: Dict mapping subgraph output boundary node -> target graph users. A None user implies we need to select a compatible target user.
-    
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
     Returns:
         A tuple of (input_mapping, topo_target_input_nodes, output_mapping)
         input_mapping: Dict mapping subgraph input boundary node -> list of args in either the target graph or the subgraph.
@@ -222,7 +239,7 @@ def find_subgraph_connections(
     
     def are_nodes_compatible(node1, node2):
         # Skip placeholder and output nodes
-        if node1.op in ["placeholder", "output"] or node2.op in ["placeholder", "output"]:
+        if node1.op in EXCLUDED_NODE_OPS or node2.op in EXCLUDED_NODE_OPS:
             return False
             
         # Check tensor metadata
@@ -233,7 +250,8 @@ def find_subgraph_connections(
             return False
 
         # Ensure batch dimension matches
-        if node1.meta["tensor_meta"].shape[0] != node2.meta["tensor_meta"].shape[0]:
+        # TODO: Find out when would this fail?
+        if get_feature_dims(node1.meta["tensor_meta"].shape, safe_dims=safe_dims) != get_feature_dims(node2.meta["tensor_meta"].shape, safe_dims=safe_dims):
             return False
             
         return True
@@ -255,7 +273,7 @@ def find_subgraph_connections(
         output_mapping,
         get_candidates(output_mapping),
         target_graph,
-       target_input_nodes
+        target_input_nodes,
     )
     return input_mapping, topo_target_input_nodes, output_mapping
 
@@ -284,7 +302,7 @@ def _select_random_mapping(
         for i, arg_or_user in enumerate(args_or_users):  # TODO if these are users (meaning output_mapping), we don't necessarily need the same number of users in the target graph... But we are forcing it to be the same here.
             if arg_or_user is not None:
                 continue
-            candidates = [c for c in candidates_dict.get(node, []) if c not in used_candidates and c not in visited_nodes_set]
+            candidates = [c for c in candidates_dict.get(node, []) if c not in used_candidates and c not in visited_nodes_set]  # TODO let's make this a real for loop, and break out when you ever hit a node of our _self_attention_transposes wrapper
             if candidates:
                 selected = random.choice(candidates)
                 used_candidates.add(selected)
@@ -310,6 +328,7 @@ def _traverse_and_extract_target_inputs(target_graph: torch.fx.Graph, target_inp
 
 def insert_subgraph(
     target_graph_module: torch.fx.GraphModule,
+    safe_dims: int,
     subgraph_nodes: set[torch.fx.Node],
     input_mapping: dict[torch.fx.Node, list[torch.fx.Node|list[torch.fx.Node]]],
     topo_target_input_nodes: list[torch.fx.Node],  # TODO ideally we can just sort the input_mapping to be topographical instead of needing this list
@@ -318,13 +337,14 @@ def insert_subgraph(
     """
     Inserts a subgraph into the target graph.
     Args:
-        target_graph: The FX graph to insert into.
+        target_graph_module: The FX graph module to insert into.
+        safe_dims: The number of dimensions to skip from the beginning of the shape tuple.
         subgraph_nodes: Set of nodes in the subgraph.
         input_mapping: Dict mapping subgraph input boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
         topo_target_input_nodes: List of target nodes for the input boundary nodes, in topological order.
         output_mapping: Dict mapping subgraph output boundary node -> target node(s). If it's a list, it means we need to select one of the target nodes.
     Returns:
-        Modified target_graph.
+        Modified target_graph_module.
     """
     new_node_names = set()
     old_to_new = {}
@@ -347,8 +367,15 @@ def insert_subgraph(
             target_graph_module.add_submodule(new_module_name, m=copied_module)
             new_node_names.add(new_module_name)
         elif node.op == "get_attr":
-            new_attr_name = get_unique_name(target_graph_module, node.target)
-            original_attr_value = getattr(node.graph.owning_module, node.target)
+            # Flatten dotted target path (e.g. "transformer.h.1.attn.bias") to a
+            # single-level attribute name so setattr/getattr work correctly.
+            flat_target = node.target.replace(".", "_")
+            new_attr_name = get_unique_name(target_graph_module, flat_target)
+            # Traverse the dotted path on the source module to get the real value
+            source_module = node.graph.owning_module
+            for attr_part in node.target.split("."):
+                source_module = getattr(source_module, attr_part)
+            original_attr_value = source_module
             setattr(target_graph_module, new_attr_name, copy.deepcopy(original_attr_value))
             new_node_names.add(new_attr_name)
 
@@ -373,8 +400,9 @@ def insert_subgraph(
                 target_graph_module, _ = adapt_node_shape(
                     target_graph_module,
                     node=target_input,
-                    current_size=target_input.meta["tensor_meta"].shape[1:],
-                    target_size=node.args[j].meta["tensor_meta"].shape[1:],
+                    current_size=get_feature_dims(target_input.meta["tensor_meta"].shape, safe_dims=safe_dims),
+                    target_size=get_feature_dims(node.args[j].meta["tensor_meta"].shape, safe_dims=safe_dims),
+                    safe_dims=safe_dims,
                     target_user=new_node
                 )
         else:
@@ -421,8 +449,9 @@ def insert_subgraph(
             target_graph_module, _ = adapt_node_shape(
                 target_graph_module,
                 node=new_out_node,
-                current_size=sub_out.meta["tensor_meta"].shape[1:],
-                target_size=first_arg_shape[1:],
+                current_size=get_feature_dims(sub_out.meta["tensor_meta"].shape, safe_dims=safe_dims),
+                target_size=get_feature_dims(first_arg_shape, safe_dims=safe_dims),
+                safe_dims=safe_dims,
                 target_user=user
             )
 
