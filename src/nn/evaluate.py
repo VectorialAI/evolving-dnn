@@ -112,7 +112,6 @@ def calculate_fitness(
         # Calculate FLOPs per sample for this model
         flops_per_sample = calculate_model_flops(
             model_copy,
-            batch_size,
             block_size,
             example_input
         )
@@ -347,7 +346,6 @@ def calculate_perplexity(
 
 def calculate_model_flops(
     model: torch.nn.Module,
-    batch_size: int,
     block_size: int,
     example_input: torch.Tensor = None,
 ) -> int:
@@ -356,7 +354,6 @@ def calculate_model_flops(
     
     Args:
         model: The model to analyze
-        batch_size: Batch size to use for calculation
         block_size: Sequence length for the model
         example_input: Optional example input tensor to determine shape/dtype
         
@@ -366,20 +363,20 @@ def calculate_model_flops(
     if example_input is None:
         example_input = torch.zeros(1, block_size, dtype=torch.long)
     
-    # Build input that matches the model's batch size
+    # Profile a single sample so the caller can scale by training batch size.
     seq_len = int(example_input.shape[1]) if example_input.dim() >= 2 else int(block_size)
     dtype = example_input.dtype
     
     def input_constructor(input_res):
         # Return a single tensor, not a tuple
-        return torch.zeros(batch_size, seq_len, dtype=dtype)
+        return torch.zeros(1, seq_len, dtype=dtype)
     
     try:
         # ptflops monkey-patches global state, so serialize access.
         with _flops_lock:
             macs, _params = get_model_complexity_info(
                 model,
-                input_res=(batch_size, seq_len),
+                input_res=(1, seq_len),
                 input_constructor=input_constructor,
                 as_strings=False,
                 print_per_layer_stat=False,
