@@ -6,10 +6,10 @@ import os
 import torch
 from torch.fx import Graph
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+# Use the object-oriented Agg API (not pyplot) because plots are generated from
+# parallel evaluation worker threads and pyplot's global state is not thread-safe.
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 
 from ..evolution import Evolution
 from .individual import NeuralNetworkIndividual
@@ -120,7 +120,9 @@ class NeuralNetworkEvolution(Evolution):
             paired = sorted(zip(tokens, losses), key=lambda pair: pair[0])
             tokens_sorted, losses_sorted = zip(*paired)
 
-            fig, ax = plt.subplots(figsize=(6, 4))
+            fig = Figure(figsize=(6, 4))
+            FigureCanvasAgg(fig)
+            ax = fig.add_subplot()
             ax.plot(tokens_sorted, losses_sorted, linewidth=1.5)
             ax.set_title(f"Individual {individual_id} Training Loss")
             ax.set_xlabel("Tokens Processed")
@@ -129,7 +131,6 @@ class NeuralNetworkEvolution(Evolution):
             ax.grid(True, alpha=0.3)
             fig.tight_layout()
             fig.savefig(filepath, bbox_inches="tight")
-            plt.close(fig)
             return True
         except Exception:
             logging.exception("Failed to generate loss curve plot for individual %s", individual_id)
