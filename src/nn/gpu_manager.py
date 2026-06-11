@@ -51,12 +51,28 @@ class GPUManager:
                 (1 - vram_safety_fraction) * 100,
             )
 
+    @property
+    def max_usable_bytes(self) -> int:
+        """Largest reservation any single device can ever satisfy."""
+        return max(self._usable_bytes)
+
     def acquire(self, estimated_bytes: int) -> str:
         """Reserve *estimated_bytes* on the least-loaded GPU that can fit it.
 
         Blocks until a device has room.  Returns a device string like
         ``"cuda:0"``.
+
+        Raises:
+            ValueError: If *estimated_bytes* exceeds every device's usable
+                VRAM even when fully unreserved, since waiting would never
+                succeed and the calling thread would block forever.
         """
+        if estimated_bytes > self.max_usable_bytes:
+            raise ValueError(
+                f"Estimated VRAM requirement ({estimated_bytes / 1e6:.1f} MB) exceeds the "
+                f"largest usable device capacity ({self.max_usable_bytes / 1e6:.1f} MB); it can never be scheduled"
+            )
+
         with self._condition:
             while True:
                 best_idx = self._find_best_device(estimated_bytes)
