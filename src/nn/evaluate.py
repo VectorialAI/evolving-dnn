@@ -31,35 +31,70 @@ def estimate_vram_bytes(
     """Return a conservative estimate of GPU VRAM needed to train *model*.
 
     Accounts for parameters, Adam optimizer states (2x params), gradients,
-    and a rough activation estimate.
+    and activations stored for the backward pass (per-layer outputs plus
+    attention score matrices).
     """
     param_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
     # Adam keeps first and second moment estimates (same shape as params)
     optimizer_bytes = param_bytes * 2
     gradient_bytes = param_bytes
 
-    # Rough activation estimate: batch_size * sequence_length * largest_dim * 4 bytes
-    # We scan all linear/embedding layers to find the largest hidden dim.
-    largest_dim = 0
+    bytes_per_element = 4  # float32
+
+    # Activations are kept alive for the backward pass, so sum the output of
+    # every layer rather than just the single largest one.
+    layer_activation_bytes = 0
     for module in model.modules():
         if isinstance(module, torch.nn.Linear):
-            largest_dim = max(largest_dim, module.out_features)
+            layer_activation_bytes += batch_size * block_size * module.out_features * bytes_per_element
         elif isinstance(module, torch.nn.Embedding):
-            largest_dim = max(largest_dim, module.embedding_dim)
-    if largest_dim == 0:
-        largest_dim = 512  # fallback
-    activation_bytes = batch_size * block_size * largest_dim * 4  # float32
+            layer_activation_bytes += batch_size * block_size * module.embedding_dim * bytes_per_element
+        elif isinstance(module, torch.nn.LayerNorm):
+            layer_activation_bytes += batch_size * block_size * math.prod(module.normalized_shape) * bytes_per_element
+    if layer_activation_bytes == 0:
+        layer_activation_bytes = batch_size * block_size * 512 * bytes_per_element  # fallback
+
+    # Each attention block materializes (B, n_head, T, T) score tensors; the
+    # pre-softmax scores, softmax output, and dropout mask all stay alive for
+    # the backward pass, hence the factor of 3.
+    attention_bytes = 0
+    graph = getattr(model, "graph", None)
+    if graph is not None:
+        for node in graph.nodes:
+            if node.op == "call_function" and getattr(node.target, "__name__", "") == "_self_attention_transposes":
+                n_head = _infer_attention_heads(node)
+                attention_bytes += 3 * batch_size * n_head * block_size * block_size * bytes_per_element
+
+    # Extra headroom for intermediates not counted above (GELU inputs, q/k/v
+    # transposes, temporary buffers, allocator fragmentation).
+    activation_bytes = 2 * (layer_activation_bytes + attention_bytes)
 
     total = param_bytes + optimizer_bytes + gradient_bytes + activation_bytes
     logging.debug(
-        "VRAM estimate: params=%.1fMB  optim=%.1fMB  grads=%.1fMB  acts=%.1fMB  total=%.1fMB",
+        "VRAM estimate: params=%.1fMB  optim=%.1fMB  grads=%.1fMB  layer_acts=%.1fMB  attn_acts=%.1fMB  total=%.1fMB",
         param_bytes / 1e6,
         optimizer_bytes / 1e6,
         gradient_bytes / 1e6,
-        activation_bytes / 1e6,
+        layer_activation_bytes / 1e6,
+        attention_bytes / 1e6,
         total / 1e6,
     )
     return total
+
+
+def _infer_attention_heads(attention_node, default_heads: int = 8) -> int:
+    """Best-effort recovery of n_head from a traced _self_attention_transposes call.
+
+    The k/q/v args feeding the attention node are produced by
+    ``view(batch, seq, n_head, head_dim)`` calls whose n_head was baked in as a
+    constant during tracing. Falls back to a conservative default when the
+    graph has been mutated and the pattern no longer holds.
+    """
+    for arg in attention_node.args[:3]:
+        view_args = getattr(arg, "args", ())
+        if len(view_args) == 5 and isinstance(view_args[3], int):
+            return view_args[3]
+    return default_heads
 
 def calculate_fitness(
     individual: NeuralNetworkIndividual,
@@ -145,33 +180,61 @@ def calculate_fitness(
     estimated_bytes = 0
     if gpu_manager is not None:
         estimated_bytes = estimate_vram_bytes(individual.graph_module, batch_size_for_est, block_size)
-        device = gpu_manager.acquire(estimated_bytes)
-        individual.train_config.device = device
-        logging.info(f"Individual {individual.id}: acquired device {device} (est. {estimated_bytes / 1e6:.1f} MB)")
 
-    try:
-        return _run_training_and_eval(
-            individual=individual,
-            iterable_train_dataset=iterable_train_dataset,
-            iterable_test_dataset=iterable_test_dataset,
-            tokenizer=tokenizer,
-            block_size=block_size,
-            num_train_steps=num_train_steps,
-            device=device,
-            total_batches_for_evaluation=total_batches_for_evaluation,
-            validation_batch_size=validation_batch_size,
-            loss_log_frequency=loss_log_frequency,
-            iter_timeout=iter_timeout,
-            secondary_iter_timeout=secondary_iter_timeout,
-        )
-    finally:
-        # Always move model back to CPU and release the GPU reservation
-        individual.graph_module = individual.graph_module.to('cpu')
-        if 'cuda' in device:
-            torch.cuda.empty_cache()
-        if gpu_manager is not None and estimated_bytes:
-            gpu_manager.release(device, estimated_bytes)
-            logging.info(f"Individual {individual.id}: released device {device}")
+    max_oom_retries = 1
+    for attempt in range(max_oom_retries + 1):
+        if gpu_manager is not None:
+            device = gpu_manager.acquire(estimated_bytes)
+            individual.train_config.device = device
+            logging.info(f"Individual {individual.id}: acquired device {device} (est. {estimated_bytes / 1e6:.1f} MB)")
+        reserved_bytes = estimated_bytes
+
+        try:
+            return _run_training_and_eval(
+                individual=individual,
+                iterable_train_dataset=iterable_train_dataset,
+                iterable_test_dataset=iterable_test_dataset,
+                tokenizer=tokenizer,
+                block_size=block_size,
+                num_train_steps=num_train_steps,
+                device=device,
+                total_batches_for_evaluation=total_batches_for_evaluation,
+                validation_batch_size=validation_batch_size,
+                loss_log_frequency=loss_log_frequency,
+                iter_timeout=iter_timeout,
+                secondary_iter_timeout=secondary_iter_timeout,
+            )
+        except torch.OutOfMemoryError:
+            if gpu_manager is None or attempt >= max_oom_retries:
+                raise
+            # The OOM proves the estimate was too low. Bump the reservation
+            # using the device's observed peak (an upper bound, since the
+            # stat is device-wide), capped at a full GPU so acquire() can
+            # always eventually satisfy it (degenerating to a solo retry).
+            peak_bytes = torch.cuda.max_memory_allocated(device)
+            estimated_bytes = min(max(estimated_bytes * 2, peak_bytes), gpu_manager.max_usable_bytes)
+            logging.warning(
+                f"Individual {individual.id}: OOM on {device} with {reserved_bytes / 1e6:.1f} MB reserved "
+                f"(device peak {peak_bytes / 1e6:.1f} MB); retrying with {estimated_bytes / 1e6:.1f} MB"
+            )
+            # Discard the partially trained weights so the retry doesn't get
+            # extra training steps relative to its peers.
+            _reset_model_parameters(individual.graph_module)
+        finally:
+            # Always move model back to CPU and release the GPU reservation
+            individual.graph_module = individual.graph_module.to('cpu')
+            if 'cuda' in device:
+                torch.cuda.empty_cache()
+            if gpu_manager is not None and reserved_bytes:
+                gpu_manager.release(device, reserved_bytes)
+                logging.info(f"Individual {individual.id}: released device {device}")
+
+
+def _reset_model_parameters(model: torch.nn.Module) -> None:
+    """Re-initialize every submodule's parameters, discarding any training."""
+    for module in model.modules():
+        if hasattr(module, "reset_parameters"):
+            module.reset_parameters()
 
 
 def _run_training_and_eval(
