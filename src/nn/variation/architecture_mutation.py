@@ -394,13 +394,18 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
     # Get shapes before removing node
     removed_output_shape = reference_node.meta['tensor_meta'].shape  # SHAPE NOTE: Full shape with safe_dims dimensions
     for feeding_node in reference_node.args:
-        if hasattr(feeding_node, 'meta') and 'tensor_meta' in feeding_node.meta and hasattr(feeding_node.meta['tensor_meta'], 'shape'):
-            feeding_output_shape = feeding_node.meta['tensor_meta'].shape
+        if not isinstance(feeding_node, torch.fx.Node) or 'tensor_meta' not in feeding_node.meta:
+            continue
+        tensor_meta = feeding_node.meta['tensor_meta']
+        if hasattr(tensor_meta, 'shape'):
+            feeding_output_shape = tensor_meta.shape
             break
-        elif isinstance(feeding_node.meta['tensor_meta'], tuple) and hasattr(feeding_node.meta['tensor_meta'][0], 'shape'):  # split nodes have a tuple of tensor_metas
-            feeding_output_shape = feeding_node.meta['tensor_meta'][0].shape
+        elif isinstance(tensor_meta, tuple) and tensor_meta and hasattr(tensor_meta[0], 'shape'):  # split nodes have a tuple of tensor_metas
+            feeding_output_shape = tensor_meta[0].shape
             break
-    
+    else:
+        raise ValueError(f"Node {reference_node.name} has no input node with shape metadata, can't be removed")
+
     # Extract feature dimensions
     feeding_output_features = get_feature_dims(feeding_output_shape, safe_dims=safe_dims)
     
