@@ -403,47 +403,31 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
     
     # Extract feature dimensions
     feeding_output_features = get_feature_dims(feeding_output_shape, safe_dims=safe_dims)
-    
-    # Step 1: Create list of child node names before removal
-    original_child_names = []
-    for user in reference_node.users:
-        original_child_names.append(user.name)
-        logging.debug(f"Original child: {user.name}")
-    
-    # Step 2: Remove the node from the graph and replace all uses
-    reference_node.replace_all_uses_with(feeding_node)
-    graph.graph.erase_node(reference_node)
-    
-    graph.delete_all_unused_submodules()
+    removed_output_features = get_feature_dims(removed_output_shape, safe_dims=safe_dims)
 
-    # Step 3: Build shapes list by checking feeder node's children against original list
-    children_shapes = []
-    for user in feeding_node.users:
-        if user.name in original_child_names:
-            # This child was originally using the removed node
-            children_shapes.append(removed_output_shape)
-            logging.debug(f"Child {user.name} was in original list, adding removed node shape")
-        else:
-            # This child was not originally using the removed node
-            children_shapes.append("pass")
-            logging.debug(f"Child {user.name} was NOT in original list, adding 'pass'")
-    
-    # Determine child_input_shape argument for _adapt_connections
-    if len(children_shapes) == 1:
-        # Single child, use single shape (backward compatibility)
-        child_input_shape = children_shapes[0]
+    # If the feeder's output shape differs from the removed node's, route the
+    # feeder through an adapter chain that reproduces the removed node's output
+    # shape. The chain is built with target_user=reference_node so it threads
+    # through reference_node's own arg slot; replace_all_uses_with below then
+    # rewires exactly the use-sites that consumed the removed node — leaving
+    # any direct uses of the feeder untouched (a user such as cat(feeder,
+    # removed) keeps the feeder's raw output on its other slot).
+    if feeding_output_features != removed_output_features:
+        graph, replacement_node = adapt_node_shape(
+            graph,
+            feeding_node,
+            feeding_output_features,
+            removed_output_features,
+            safe_dims=safe_dims,
+            target_user=reference_node,
+        )
     else:
-        # Multiple children, use list of shapes
-        child_input_shape = children_shapes
+        replacement_node = feeding_node
 
-    # Adapt connections between input node and its new users with clear shape distinction
-    # parent_output_shape must match new_node_input_features 
-    graph = _adapt_connections(graph, new_node=feeding_node, 
-                             parent_output_shape=feeding_output_shape,
-                             new_node_input_features=feeding_output_features,
-                             new_node_output_features=feeding_output_features,
-                             child_input_shape=child_input_shape,
-                             safe_dims=safe_dims)
+    reference_node.replace_all_uses_with(replacement_node)
+    graph.graph.erase_node(reference_node)
+
+    graph.delete_all_unused_submodules()
 
     # Lint and recompile the graph
     graph.graph.lint()
@@ -452,7 +436,7 @@ def _remove_node(graph: NeuralNetworkIndividualGraphModule, reference_node: torc
     # Run shape propagation again to update all shape metadata
     ShapeProp(graph).propagate(graph.example_input)
 
-    return graph, feeding_node
+    return graph, replacement_node
 
 def _adapt_connections(
     graph: torch.fx.GraphModule,
@@ -460,28 +444,27 @@ def _adapt_connections(
     parent_output_shape: tuple,  # Full shape with batch dimension from parent node output
     new_node_input_features: tuple,  # Feature dimensions only (excluding safe_dims dimensions) for new node input
     new_node_output_features: tuple,  # Feature dimensions only (excluding safe_dims dimensions) for new node output
-    child_input_shape: tuple | list[tuple],  # Full shape with batch dimension required by child node, can be a list of shapes for multiple children
+    child_input_shape: tuple,  # Full shape with batch dimension required by child node
     safe_dims: int
 ):
     """
     Adapts the connections to/from a node to ensure all connected nodes have compatible shapes.
-    
+
     Args:
         graph: The FX graph
         new_node: The node whose connections need adaptation
         parent_output_shape: The shape output by the parent node (full shape with batch dimension)
         new_node_input_features: The input shape expected by new node (feature dimensions only, excluding safe_dims dimensions)
         new_node_output_features: The output shape produced by new node (feature dimensions only, excluding safe_dims dimensions)
-        child_input_shape: The input shape expected by the child node (full shape with batch dimension), can be a list of shapes for multiple children
+        child_input_shape: The input shape expected by the child node (full shape with batch dimension)
         safe_dims: The number of dimensions to skip from the beginning of the shape tuple
     Returns:
         graph: The modified graph
     """
-    
+
     # Extract feature dimensions from parent and child shapes
     parent_features = get_feature_dims(parent_output_shape, safe_dims=safe_dims)
-    if not isinstance(child_input_shape, list):
-        child_features = get_feature_dims(child_input_shape, safe_dims=safe_dims)
+    child_features = get_feature_dims(child_input_shape, safe_dims=safe_dims)
 
     # Special handling for skip connections (torch.add operations)
     # TODO: Handle any kind of skip connection (e.g. torch.cat, torch.mul, etc.)
@@ -514,28 +497,9 @@ def _adapt_connections(
             logging.debug(f"Parent output features {parent_features} don't match node input features {new_node_input_features}")
             graph, parent_node = adapt_node_shape(graph, new_node.args[0], parent_features, new_node_input_features, safe_dims=safe_dims)
 
-    # Handle new-node-to-child connection(s)
-    if isinstance(child_input_shape, list):
-        # Handle multiple children
-        # Get the current children in their order after any reassignments
-        child_users = list(new_node.users)
-        
-        for i, child_shape in enumerate(child_input_shape):
-            if child_shape == "pass":
-                logging.debug(f"Skipping child {i} (pass)")
-                continue
-            
-            # Get the corresponding child user for targeted adaptation
-            target_child = child_users[i] if i < len(child_users) else None
-            
-            child_features = get_feature_dims(child_shape, safe_dims=safe_dims)
-            if new_node_output_features != child_features:
-                logging.debug(f"Node output features {new_node_output_features} don't match child {i} input features {child_features}")
-                graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, safe_dims=safe_dims, target_user=target_child)
-    else:
-        # Handle single child (original behavior)
-        if new_node_output_features != child_features:
-            logging.debug(f"Node output features {new_node_output_features} don't match child input features {child_features}")
-            graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, safe_dims=safe_dims)
-    
+    # Handle new-node-to-child connection
+    if new_node_output_features != child_features:
+        logging.debug(f"Node output features {new_node_output_features} don't match child input features {child_features}")
+        graph, child_node = adapt_node_shape(graph, new_node, new_node_output_features, child_features, safe_dims=safe_dims)
+
     return graph

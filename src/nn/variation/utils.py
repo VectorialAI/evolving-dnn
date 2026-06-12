@@ -81,12 +81,13 @@ def add_specific_node(graph, reference_node, module_or_function, kwargs=None, ta
     
     # Update connections based on target_user
     if target_user is not None:
-        # Find the index of reference_node in target_user's args
-        for i, arg in enumerate(target_user.args):
-            if arg is reference_node:
-                # Update just this specific connection
-                target_user.args = tuple(new_node if x is reference_node else x for x in target_user.args)
-                break
+        if isinstance(reference_node, torch.fx.Node):
+            # Replace each use of reference_node within target_user only,
+            # including uses nested inside tuples/lists (e.g. torch.cat args)
+            def _swap(arg):
+                return new_node if arg is reference_node else arg
+            target_user.args = torch.fx.node.map_arg(target_user.args, _swap)
+            target_user.kwargs = torch.fx.node.map_arg(target_user.kwargs, _swap)
     else:
         # Update all users of the reference node to use the new node
         reference_node.replace_all_uses_with(new_node)
