@@ -460,7 +460,10 @@ def insert_subgraph(
     target_graph_module.graph.lint()
     target_graph_module.recompile()
 
-    # Shape propagation
+    # Shape propagation. ShapeProp executes the graph, so a failure here means
+    # the forward pass is broken and evaluation would fail anyway — re-raise so
+    # the child is rejected at variation time (before it occupies a GPU) and
+    # never carries stale tensor_meta into later shape-dependent logic.
     try:
         ShapeProp(target_graph_module).propagate(target_graph_module.example_input)
     except Exception:
@@ -471,6 +474,7 @@ def insert_subgraph(
                 logging.debug(f"{node.name}: {node.meta['tensor_meta'].shape}")
             else:
                 logging.debug(f"{node.name}: No shape info")
+        raise
 
     return target_graph_module, new_node_names
 
