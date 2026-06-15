@@ -376,7 +376,7 @@ def calculate_model_flops(
         with _flops_lock:
             macs, _params = get_model_complexity_info(
                 model,
-                input_res=(1, seq_len),
+                input_res=(seq_len,),
                 input_constructor=input_constructor,
                 as_strings=False,
                 print_per_layer_stat=False,
