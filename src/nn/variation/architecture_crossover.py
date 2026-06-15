@@ -249,9 +249,10 @@ def find_subgraph_connections(
         if node1.meta["tensor_meta"].dtype != node2.meta["tensor_meta"].dtype:
             return False
 
-        # Ensure batch dimension matches
-        # TODO: Find out when would this fail?
-        if get_feature_dims(node1.meta["tensor_meta"].shape, safe_dims=safe_dims) != get_feature_dims(node2.meta["tensor_meta"].shape, safe_dims=safe_dims):
+        # Ensure the safe dims (e.g. batch and sequence) match. Feature dims may
+        # differ freely: insert_subgraph bridges them with adapt_node_shape,
+        # which only ever reshapes the dims after safe_dims.
+        if node1.meta["tensor_meta"].shape[:safe_dims] != node2.meta["tensor_meta"].shape[:safe_dims]:
             return False
             
         return True
