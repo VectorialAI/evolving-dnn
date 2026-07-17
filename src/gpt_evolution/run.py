@@ -214,6 +214,7 @@ def run_experiment(
     train_config_params = {
         "training_total_batches": training_config.get("training_total_batches"),
         "device": training_config["device"],
+        "grad_ema_decay": evolution_config.get("grad_ema_decay", 0.95),
     }
     experiment_recorder.update_system_info({"requested_training_device": training_config["device"]})
 
