@@ -30,6 +30,7 @@ class Trainer:
         C.betas = (0.9, 0.95)
         C.weight_decay = 0.1 # only applied on matmul weights
         C.grad_norm_clip = 1.0
+        C.grad_ema_decay = 0.95
         return C
 
     def __init__(self, config, model, train_dataset):
@@ -125,6 +126,8 @@ class Trainer:
             # backprop and update the parameters
             model.zero_grad(set_to_none=True)
             self.loss.backward()
+            if hasattr(model, 'update_grad_stats'):
+                model.update_grad_stats(config.grad_ema_decay)
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
             self.optimizer.step()
 

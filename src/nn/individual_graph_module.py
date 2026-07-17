@@ -1,9 +1,46 @@
+import copy
+
+import torch
 import torch.fx
 
 class NeuralNetworkIndividualGraphModule(torch.fx.GraphModule):
     def __init__(self, graph_module: torch.fx.GraphModule, example_input: torch.Tensor|None = None):
         super().__init__(graph_module, graph_module.graph)
         self.example_input = example_input
+        # Running gradient importance for directly parameterized FX nodes.
+        self.node_grad_stats = {}
+        self.sync_grad_stats()
+
+    def _weighted_nodes(self):
+        for node in self.graph.nodes:
+            if node.op == "call_module":
+                module = self.get_submodule(node.target)
+                if any(param.requires_grad for param in module.parameters(recurse=False)):
+                    yield node, module
+
+    def sync_grad_stats(self):
+        # Reconcile only after graph changes; training updates existing entries in place.
+        current = {node.name for node, _ in self._weighted_nodes()}
+        self.node_grad_stats = {
+            name: dict(self.node_grad_stats.get(name, {"ema_norm": 0.0, "updates": 0}))
+            for name in current
+        }
+
+    def update_grad_stats(self, decay: float):
+        node_norms = []
+        for node, module in self._weighted_nodes():
+            grads = [param.grad.detach() for param in module.parameters(recurse=False) if param.grad is not None]
+            if not grads:
+                continue
+            node_norms.append((node.name, torch.stack([grad.norm() for grad in grads]).norm()))
+        if not node_norms:
+            return
+        # Transfer scalar norms once rather than synchronizing the GPU per node.
+        norms = torch.stack([norm for _, norm in node_norms]).cpu().tolist()
+        for (name, _), norm in zip(node_norms, norms):
+            stats = self.node_grad_stats.setdefault(name, {"ema_norm": 0.0, "updates": 0})
+            stats["ema_norm"] = norm if not stats["updates"] else decay * stats["ema_norm"] + (1 - decay) * norm
+            stats["updates"] += 1
 
     def configure_optimizers(self, train_config):  # COPIED FROM karpathy/mingpt/model.py
         """
@@ -54,4 +91,6 @@ class NeuralNetworkIndividualGraphModule(torch.fx.GraphModule):
         example_input = self.example_input
         temp = super().__deepcopy__(memo)
         temp.example_input = example_input  # this is not a deep copy of the tensor, but it's fine for now
+        temp.node_grad_stats = copy.deepcopy(self.node_grad_stats, memo)
+        temp.sync_grad_stats()
         return temp

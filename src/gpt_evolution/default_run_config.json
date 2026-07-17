@@ -19,6 +19,7 @@
       "num_children_per_generation": 10,
       "num_generations": 10,
       "crossover_instead_of_mutation_rate": 0.5,
+      "grad_ema_decay": 0.95,
       "max_subgraph_attempts": 100,
       "unremovable_node_targets": ["torch.nn.functional.softmax", "torch.add", "torch.cat", "torch.mul"],
       "safe_dims": 2,

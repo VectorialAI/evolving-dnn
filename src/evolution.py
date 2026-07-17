@@ -210,6 +210,8 @@ class Evolution:
                         "with_parent_id": parent.id,
                     }
                 )
+        if hasattr(child, "graph_module") and hasattr(child.graph_module, "sync_grad_stats"):
+            child.graph_module.sync_grad_stats()
         return child, applied_operations
 
     def _mutate(self, child: Individual) -> tuple[Individual, list[dict]]:
@@ -234,6 +236,8 @@ class Evolution:
                         "probability": probability,
                     }
                 )
+        if hasattr(child, "graph_module") and hasattr(child.graph_module, "sync_grad_stats"):
+            child.graph_module.sync_grad_stats()
         return child, applied_operations
     
     def _selection(self) -> list[Individual]:

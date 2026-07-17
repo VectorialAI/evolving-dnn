@@ -90,6 +90,7 @@ def create_random_train_config(
     beta_2_bounds=(0.95, 0.999),
     weight_decay_bounds=(0.0, 0.1),
     grad_norm_clip_bounds=(0.0, 1.0),
+    grad_ema_decay=0.95,
     training_total_batches=5000,
     device='auto',
 ):
@@ -103,6 +104,7 @@ def create_random_train_config(
     )
     train_config.weight_decay = random.uniform(weight_decay_bounds[0], weight_decay_bounds[1])
     train_config.grad_norm_clip = random.uniform(grad_norm_clip_bounds[0], grad_norm_clip_bounds[1])
+    train_config.grad_ema_decay = grad_ema_decay
     train_config.num_workers = 0  # I checked: this takes <0.5% of the total train step time with num_workers=0
     train_config.training_total_batches = training_total_batches
 
